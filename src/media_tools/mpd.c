@@ -4240,7 +4240,7 @@ GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_Adapta
 	/*segmentTemplate*/
 	media_url = init_template = index_template = NULL;
 
-	/*apply inheritance of attributes, lowest level having preceedence*/
+	/*apply inheritance of attributes, lowest level having precedence*/
 	if (period->segment_template) {
 		if (period->segment_template->initialization) init_template = period->segment_template->initialization;
 		if (period->segment_template->index) index_template = period->segment_template->index;
