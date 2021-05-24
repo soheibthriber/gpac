@@ -667,7 +667,7 @@ static GF_Err dasher_stream_period_changed(GF_Filter *filter, GF_DasherCtx *ctx,
 			dasher_flush_segment(ctx, base_ds, GF_TRUE);
 		}
 
-		ds->ept = UINT64_MAX;
+		ds->ept = (u64)-1;
 
 		ctx->force_period_switch = GF_TRUE;
 		dasher_update_period_duration(ctx, GF_TRUE);
