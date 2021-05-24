@@ -319,6 +319,7 @@ typedef struct _dash_stream
 
 	u32 startNumber, seg_number;
 	Bool rep_init;
+	u64 ept;
 	u64 first_cts;
 	u64 first_dts;
 	s64 pts_minus_cts;
@@ -660,11 +661,13 @@ static GF_Err dasher_stream_period_changed(GF_Filter *filter, GF_DasherCtx *ctx,
 			return GF_BAD_PARAM;
 		}
 		base_ds->nb_comp_done ++;
-		ds->first_cts_in_next_seg = ds->est_first_cts_in_next_seg;;
+		ds->first_cts_in_next_seg = ds->est_first_cts_in_next_seg;
 
 		if (base_ds->nb_comp_done == base_ds->nb_comp) {
 			dasher_flush_segment(ctx, base_ds, GF_TRUE);
 		}
+
+		ds->ept = UINT64_MAX;
 
 		ctx->force_period_switch = GF_TRUE;
 		dasher_update_period_duration(ctx, GF_TRUE);
@@ -6007,7 +6010,7 @@ static void dasher_insert_timeline_entry(GF_DasherCtx *ctx, GF_DashStream *ds)
 		GF_MPD_SegmentTimeline **p_tl=NULL;
 
 		if (!ds->set) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[Dasher] failed to store timeline entru, no AdpatationSet assigned !\n"));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[Dasher] failed to store timeline entry, no AdpatationSet assigned !\n"));
 			return;
 		}
 		assert(ds->set);
@@ -6053,14 +6056,14 @@ static void dasher_insert_timeline_entry(GF_DasherCtx *ctx, GF_DashStream *ds)
 
 	//append to previous entry if possible
 	s = gf_list_last(tl->entries);
-	if (s && (s->duration == duration) && (s->start_time + (s->repeat_count+1) * s->duration == ds->seg_start_time)) {
+	if (s && (s->duration == duration) && (s->start_time + (s->repeat_count+1) * s->duration == ds->seg_start_time + ds->ept)) {
 		s->repeat_count++;
 		return;
 	}
 	//nope, allocate
 	GF_SAFEALLOC(s, GF_MPD_SegmentTimelineEntry);
 	if (!s) return;
-	s->start_time = ds->seg_start_time;
+	s->start_time = ds->seg_start_time + ds->ept;
 	s->duration = (u32) duration;
 	gf_list_add(tl->entries, s);
 }
@@ -7302,6 +7305,9 @@ static GF_Err dasher_process(GF_Filter *filter)
 			}
 
 			nb_init++;
+
+			if (cts < ds->ept)
+				ds->ept = cts;
 
 			if (ds->ts_offset) {
 				cts += ds->ts_offset;
