@@ -57,6 +57,9 @@ typedef struct
 	u32 key_valid;
 } CENCDecKey;
 
+#define DECRYPT_POSTPONE
+
+
 typedef struct
 {
 	GF_FilterPid *ipid, *opid;
@@ -101,6 +104,11 @@ typedef struct
 	u32 codec_id;
 
 	Bool force_hls_iv;
+
+#ifdef DECRYPT_POSTPONE
+	GF_List *postpone_pcks;
+#endif
+
 } GF_CENCDecStream;
 
 typedef struct
@@ -118,7 +126,110 @@ typedef struct
 	GF_BitStream *bs_r;
 
 	GF_DownloadManager *dm;
+
+#ifdef DECRYPT_POSTPONE
+	GF_List *postpone_res;
+#endif
 } GF_CENCDecCtx;
+
+#ifdef DECRYPT_POSTPONE
+
+typedef struct
+{
+	u8 *data;
+	u32 size;
+	Bool force_iv;
+	u8 IV[17];
+	u32 key_idx;
+} CENCDec_PaquetJob;
+
+typedef struct
+{
+	GF_FilterPacket *dst;
+	u32 nb_jobs, nb_job_alloc;
+	CENCDec_PaquetJob *jobs;
+
+	u32 nb_jobs_done;
+} CENCDec_PaquetState;
+
+
+static CENCDec_PaquetState *cencdec_get_pck_state(GF_CENCDecCtx *ctx)
+{
+	CENCDec_PaquetState *p = gf_list_pop_back(ctx->postpone_res);
+	if (!p) {
+		GF_SAFEALLOC(p, CENCDec_PaquetState);
+	} else {
+		p->nb_jobs_done = 0;
+		p->nb_jobs = 0;
+	}
+	return p;
+}
+GF_Err cencdec_queue_decrypt_jobs(GF_CENCDecStream *cstr, CENCDec_PaquetState *pck_state, u8 *forced_IV, u32 key_idx, u8 *buf, u32 size)
+{
+	CENCDec_PaquetJob *job;
+	Bool is_data_only = GF_FALSE;
+
+	if (pck_state->nb_jobs && (pck_state->jobs[pck_state->nb_jobs-1].data == NULL)) {
+		is_data_only = GF_TRUE;
+		job = &pck_state->jobs[pck_state->nb_jobs-1];
+	} else {
+
+		if (pck_state->nb_jobs == pck_state->nb_job_alloc) {
+			pck_state->nb_job_alloc++;
+			pck_state->jobs = gf_realloc(pck_state->jobs, sizeof(CENCDec_PaquetJob) * pck_state->nb_job_alloc);
+			if (!pck_state->jobs) return GF_OUT_OF_MEM;
+		}
+		job = &pck_state->jobs[pck_state->nb_jobs];
+	}
+	job->data = buf;
+	job->size = size;
+	//in cbcs we may get called twice with forceIV, only the latest specified IV is to be used
+	if (!is_data_only || forced_IV) {
+		job->force_iv = forced_IV ? GF_TRUE : GF_FALSE;
+		job->key_idx = key_idx;
+		if (forced_IV)
+			memcpy(job->IV, forced_IV, cstr->is_cbc ? 16 : 17);
+
+		if (!is_data_only)
+			pck_state->nb_jobs++;
+	}
+	return GF_OK;
+}
+
+GF_Err cencdec_flush_crypt_jobs(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, Bool force_flush)
+{
+	GF_Err e;
+	if (!force_flush) {
+		//in this example, flush every 8 packets
+		if (gf_list_count(cstr->postpone_pcks) < 8) {
+			return GF_OK;
+		}
+	}
+	//serial processing
+	//packets MUST be send in order of the queue
+	while (gf_list_count(cstr->postpone_pcks)) {
+		u32 i;
+		CENCDec_PaquetState *pck_state = gf_list_pop_front(cstr->postpone_pcks);
+
+		for (i=0; i<pck_state->nb_jobs; i++) {
+			CENCDec_PaquetJob *job = &pck_state->jobs[i];
+
+			if (job->force_iv) {
+				e = gf_crypt_set_IV(cstr->crypts[job->key_idx].crypt, job->IV, cstr->is_cbc ? 16 : 17);
+			}
+
+			e = gf_crypt_decrypt(cstr->crypts[job->key_idx].crypt, job->data, job->size);
+		}
+		//done, we can send the packet
+		gf_filter_pck_send(pck_state->dst);
+
+		pck_state->nb_jobs = 0;
+		gf_list_add(ctx->postpone_res, pck_state);
+	}
+
+	return GF_OK;
+}
+#endif
 
 
 #ifdef OLD_KEY_FETCHERS
@@ -1119,7 +1230,7 @@ static GF_Err cenc_dec_access_adobe(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 	return GF_BAD_PARAM;
 }
 
-static GF_Err cenc_dec_push_iv(GF_CENCDecStream *cstr, u32 key_idx, u8 *IV, u32 iv_size, u32 const_iv_size, const u8 *const_iv)
+static GF_Err cenc_dec_push_iv(GF_CENCDecStream *cstr, u32 key_idx, u8 *IV, u32 iv_size, u32 const_iv_size, const u8 *const_iv, void *pck_state)
 {
 	GF_Err e;
 
@@ -1140,7 +1251,11 @@ static GF_Err cenc_dec_push_iv(GF_CENCDecStream *cstr, u32 key_idx, u8 *IV, u32 
 
 			memmove(&IV[1], &IV[0], sizeof(char) * iv_size);
 			IV[0] = 0;	/*begin of counter*/
+#ifdef DECRYPT_POSTPONE
+			e = cencdec_queue_decrypt_jobs(cstr, pck_state, IV, key_idx, NULL, 0);
+#else
 			e = gf_crypt_set_IV(cstr->crypts[key_idx].crypt, IV, 17);
+#endif
 		} else {
 			if (const_iv) {
 				if (cstr->force_hls_iv) {
@@ -1149,7 +1264,12 @@ static GF_Err cenc_dec_push_iv(GF_CENCDecStream *cstr, u32 key_idx, u8 *IV, u32 
 					memcpy(IV, const_iv, const_iv_size);
 				}
 			}
+#ifdef DECRYPT_POSTPONE
+			e = cencdec_queue_decrypt_jobs(cstr, pck_state, IV, key_idx, NULL, 0);
+#else
 			e = gf_crypt_set_IV(cstr->crypts[key_idx].crypt, IV, 16);
+#endif
+
 		}
 		if (e) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_AUTHOR, ("[CENC] Cannot set key AES-128 %s (%s)\n", cstr->is_cenc ? "CTR" : "CBC", gf_error_to_string(e)) );
@@ -1177,6 +1297,10 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 	Bool has_subsamples = GF_FALSE;
 	const u8 *skey_const_iv = NULL;
 
+#ifdef DECRYPT_POSTPONE
+	cencdec_flush_crypt_jobs(ctx, cstr, GF_FALSE);
+#endif
+
 	//packet has been fetched, we now MUST have a key info
 	if (!cstr->cenc_ki) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_AUTHOR, ("[CENC] Packet encrypted but no KID info\n" ) );
@@ -1186,6 +1310,9 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 	gf_filter_pck_get_data(in_pck, &data_size);
 
 	if (!data_size || ! gf_filter_pck_get_crypt_flags(in_pck)) {
+#ifdef DECRYPT_POSTPONE
+		cencdec_flush_crypt_jobs(ctx, cstr, GF_TRUE);
+#endif
 		out_pck = gf_filter_pck_new_ref(cstr->opid, 0, 0, in_pck);
 		if (!out_pck) return GF_OUT_OF_MEM;
 		gf_filter_pck_merge_properties(in_pck, out_pck);
@@ -1208,6 +1335,17 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 	if (!out_pck) return GF_OUT_OF_MEM;
 
 	subsample_count = 0;
+
+#ifdef DECRYPT_POSTPONE
+	CENCDec_PaquetState *pck_state = cencdec_get_pck_state(ctx);
+	if (!pck_state) {
+		gf_filter_pck_discard(out_pck);
+		return GF_OUT_OF_MEM;
+	}
+	pck_state->dst = out_pck;
+#else
+	void *pck_state = NULL;
+#endif
 
 	if (cstr->multikey) {
 		u8 IV[17];
@@ -1242,7 +1380,7 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 			memset(IV, 0, sizeof(u8)*17);
 			gf_bs_read_data(ctx->bs_r, IV, IV_size);
 
-			e = cenc_dec_push_iv(cstr, kidx-1, IV, IV_size, 0, NULL);
+			e = cenc_dec_push_iv(cstr, kidx-1, IV, IV_size, 0, NULL, pck_state);
 			if (e) goto exit;
 		}
 		if (nb_iv_init < cstr->multikey) {
@@ -1253,7 +1391,7 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 				u8 IV_size = key_info_get_iv_size(cstr->cenc_ki->value.data.ptr, cstr->cenc_ki->value.data.size, k+1, &const_iv_size, &const_iv);
 				if (IV_size) continue;
 				memset(IV, 0, sizeof(char)*17);
-				e = cenc_dec_push_iv(cstr, k, IV, 0, const_iv_size, const_iv);
+				e = cenc_dec_push_iv(cstr, k, IV, 0, const_iv_size, const_iv, pck_state);
 				if (e) goto exit;
 			}
 		}
@@ -1275,11 +1413,19 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 			if (ctx->decrypt == DECRYPT_SKIP) {
 				GF_LOG(GF_LOG_WARNING, GF_LOG_AUTHOR, ("[CENC] Packet encrypted but no SAI info nor constant IV\n" ) );
 				e = GF_OK;
+#ifdef DECRYPT_POSTPONE
+				gf_list_add(ctx->postpone_res, pck_state);
+				pck_state = NULL;
+#endif
 				goto send_packet;
 			}
 			if (gf_filter_pck_get_crypt_flags(in_pck)) {
 				GF_LOG(GF_LOG_ERROR, GF_LOG_AUTHOR, ("[CENC] Packet encrypted but no SAI info nor constant IV\n" ) );
 			}
+			gf_filter_pck_discard(out_pck);
+#ifdef DECRYPT_POSTPONE
+			gf_list_add(ctx->postpone_res, pck_state);
+#endif
 			return GF_SERVICE_ERROR;
 		}
 
@@ -1293,7 +1439,7 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 		if (skey_const_iv_size)
 			skey_const_iv = cstr->cenc_ki->value.data.ptr+21;
 
-		e = cenc_dec_push_iv(cstr, 0, IV, iv_size, skey_const_iv_size, skey_const_iv);
+		e = cenc_dec_push_iv(cstr, 0, IV, iv_size, skey_const_iv_size, skey_const_iv, pck_state);
 		if (e) goto exit;
 	}
 	cstr->crypt_init = GF_TRUE;
@@ -1376,7 +1522,11 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 				if (cstr->force_hls_iv)
 					memcpy(IV, cstr->hls_IV, sizeof(bin128));
 
+#ifdef DECRYPT_POSTPONE
+				cencdec_queue_decrypt_jobs(cstr, pck_state, IV, kidx, NULL, 0);
+#else
 				gf_crypt_set_IV(cstr->crypts[kidx].crypt, IV, 16);
+#endif
 			}
 			if (cur_pos + bytes_clear_data + bytes_encrypted_data > data_size) {
 				GF_LOG(GF_LOG_ERROR, GF_LOG_AUTHOR, ("[CENC] Corrupted CENC sai, subsample info describe more bytes (%d) than in packet (%d)\n", cur_pos + bytes_clear_data + bytes_encrypted_data , data_size ));
@@ -1404,7 +1554,12 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 				}
 
 				while (res) {
+
+#ifdef DECRYPT_POSTPONE
+					cencdec_queue_decrypt_jobs(cstr, pck_state, NULL, kidx, out_data + pos, (res >= cryp_block) ? cryp_block : res);
+#else
 					gf_crypt_decrypt(cstr->crypts[kidx].crypt, out_data + pos, (res >= cryp_block) ? cryp_block : res);
+#endif
 					if (res >= full_block) {
 						pos += full_block;
 						assert(res>=full_block);
@@ -1425,7 +1580,12 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 					u32 clear_trailing = res % 16;
 					res -= clear_trailing;
 				}
+
+#ifdef DECRYPT_POSTPONE
+				cencdec_queue_decrypt_jobs(cstr, pck_state, NULL, kidx, out_data+cur_pos, res);
+#else
 				gf_crypt_decrypt(cstr->crypts[kidx].crypt, out_data+cur_pos, res);
+#endif
 			}
 			cur_pos += bytes_encrypted_data;
 		}
@@ -1433,11 +1593,20 @@ static GF_Err cenc_dec_process_cenc(GF_CENCDecCtx *ctx, GF_CENCDecStream *cstr, 
 	//full sample encryption in single key mode
 	else {
 		if (cstr->is_cenc) {
+#ifdef DECRYPT_POSTPONE
+			cencdec_queue_decrypt_jobs(cstr, pck_state, NULL, 0, out_data, data_size);
+#else
 			gf_crypt_decrypt(cstr->crypts[0].crypt, out_data, data_size);
+#endif
+
 		} else {
 			u32 ret = data_size % 16;
 			if (data_size >= 16) {
+#ifdef DECRYPT_POSTPONE
+				cencdec_queue_decrypt_jobs(cstr, pck_state, NULL, 0, out_data, data_size-ret);
+#else
 				gf_crypt_decrypt(cstr->crypts[0].crypt, out_data, data_size-ret);
+#endif
 			}
 		}
 	}
@@ -1447,11 +1616,21 @@ send_packet:
 	gf_filter_pck_set_property(out_pck, GF_PROP_PCK_CENC_SAI, NULL);
 	gf_filter_pck_set_crypt_flags(out_pck, 0);
 
+#ifdef DECRYPT_POSTPONE
+	gf_list_add(cstr->postpone_pcks, pck_state);
+#else
 	gf_filter_pck_send(out_pck);
+#endif
 
 exit:
 	if (e && out_pck) {
 		gf_filter_pck_discard(out_pck);
+
+#ifdef DECRYPT_POSTPONE
+		if (pck_state) {
+			gf_list_add(ctx->postpone_res, pck_state);
+		}
+#endif
 	}
 	return e;
 }
@@ -1490,7 +1669,7 @@ static GF_Err cenc_dec_process_hls_saes(GF_CENCDecCtx *ctx, GF_CENCDecStream *cs
 		return GF_SERVICE_ERROR;
 	}
 
-	e = cenc_dec_push_iv(cstr, 0, cstr->hls_IV, 16, 0, NULL);
+	e = cenc_dec_push_iv(cstr, 0, cstr->hls_IV, 16, 0, NULL, NULL);
 	if (e) goto exit;
 
 	cstr->crypt_init = GF_TRUE;
@@ -1695,6 +1874,14 @@ static void cenc_dec_stream_del(GF_CENCDecStream *cstr)
 	if (cstr->keys) gf_free(cstr->keys);
 	if (cstr->hls_key_url) gf_free(cstr->hls_key_url);
 
+#ifdef DECRYPT_POSTPONE
+	while (gf_list_count(cstr->postpone_pcks)) {
+		CENCDec_PaquetState *pck_s = gf_list_pop_back(cstr->postpone_pcks);
+		if (pck_s->jobs) gf_free(pck_s->jobs);
+		gf_free(pck_s);
+	}
+	gf_list_del(cstr->postpone_pcks);
+#endif
 
 	gf_free(cstr);
 }
@@ -1740,7 +1927,14 @@ static GF_Err cenc_dec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 		//we need full sample
 		gf_filter_pid_set_framing_mode(pid, GF_TRUE);
 
+#ifdef DECRYPT_POSTPONE
+		cstr->postpone_pcks = gf_list_new();
+#endif
 	}
+
+#ifdef DECRYPT_POSTPONE
+	cencdec_flush_crypt_jobs(ctx, cstr, GF_TRUE);
+#endif
 
 	prop = gf_filter_pid_get_property(pid, GF_PROP_PID_PROTECTION_SCHEME_VERSION);
 	if (prop) scheme_version = prop->value.uint;
@@ -1917,6 +2111,10 @@ static GF_Err cenc_dec_process(GF_Filter *filter)
 		if (!pck) {
 			if (gf_filter_pid_is_eos(cstr->ipid)) {
 				nb_eos++;
+
+#ifdef DECRYPT_POSTPONE
+				cencdec_flush_crypt_jobs(ctx, cstr, GF_TRUE);
+#endif
 				gf_filter_pid_set_eos(cstr->opid);
 			}
 			continue;
@@ -1968,6 +2166,10 @@ static GF_Err cenc_dec_initialize(GF_Filter *filter)
 		}
 	}
 	ctx->bs_r = gf_bs_new((char *) ctx, 1, GF_BITSTREAM_READ);
+
+#ifdef DECRYPT_POSTPONE
+	ctx->postpone_res = gf_list_new();
+#endif
 	return GF_OK;
 }
 
@@ -1983,6 +2185,16 @@ static void cenc_dec_finalize(GF_Filter *filter)
 
 	if (ctx->bs_r) gf_bs_del(ctx->bs_r);
 	if (ctx->cinfo) gf_crypt_info_del(ctx->cinfo);
+
+#ifdef DECRYPT_POSTPONE
+	while (gf_list_count(ctx->postpone_res)) {
+		CENCDec_PaquetState *pck_s = gf_list_pop_back(ctx->postpone_res);
+		if (pck_s->jobs) gf_free(pck_s->jobs);
+		gf_free(pck_s);
+	}
+	gf_list_del(ctx->postpone_res);
+#endif
+
 }
 
 
