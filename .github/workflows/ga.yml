@@ -1,0 +1,40 @@
+name: GitHub Actions
+run-name: build with docker
+on: [push]
+
+
+permissions:
+    actions: read
+    checks: read
+    contents: read
+    deployments: read
+    issues: write
+    discussions: read
+    packages: read
+    pages: read
+    pull-requests: write
+    repository-projects: read
+    security-events: read
+    statuses: read
+
+
+jobs:
+    docker-build:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check out code
+              uses: actions/checkout@master
+            - name: build image
+              run: docker build -t gpac-ubuntu -f build/docker/ubuntu.Dockerfile .
+
+    docker-deploy:
+        runs-on: ubuntu-latest
+        needs: docker-build
+        if: github.ref == 'refs/heads/docker'
+        steps:
+            - name: login docker hub
+              run: docker login --username aureliendavid --password ${{secrets.DOCKER_HUB_TOKEN}}
+            - name: tag docker image
+              run: docker tag gpac-ubuntu aureliendavid/gpac-ubuntu:latest
+            - name: push docker image
+              run: docker push aureliendavid/gpac-ubuntu:latest
