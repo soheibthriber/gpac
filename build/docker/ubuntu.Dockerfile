@@ -18,6 +18,7 @@ RUN git submodule update --init --recursive --force --checkout
 RUN ./build_all.sh linux
 
 
+RUN rm -rf /gpac/binaries
 RUN mkdir -p /gpac/binaries
 
 WORKDIR /gpac/gpac_public
@@ -37,11 +38,14 @@ RUN make deb
 RUN mv -v *.deb /gpac/binaries/
 
 
+#install
+RUN dpkg -i /gpac/binaries/*.deb
+
 # work build
-RUN make distclean
-RUN ./configure
-RUN make -j
-RUN make install
+# RUN make distclean
+# RUN ./configure
+# RUN make -j
+# RUN make install
 
 
 
