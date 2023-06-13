@@ -32,6 +32,8 @@ jobs:
         needs: docker-build
         if: github.ref == 'refs/heads/docker'
         steps:
+            - name: check docker images
+              run: docker image list
             - name: login docker hub
               run: docker login --username aureliendavid --password ${{secrets.DOCKER_HUB_TOKEN}}
             - name: tag docker image
