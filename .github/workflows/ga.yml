@@ -27,14 +27,14 @@ jobs:
             - name: build image
               run: docker build -t gpac-ubuntu -f build/docker/ubuntu.Dockerfile .
             - name: artifacts init
-              run: mkdir -p /artifacts
+              run: mkdir -p ~/artifacts
             - name: save image
-              run: docker save gpac-ubuntu > /artifacts/gpac-ubuntu-docker-image.tar
+              run: docker save gpac-ubuntu > ~/artifacts/gpac-ubuntu-docker-image.tar
             - name: upload artifact
               uses: actions/upload-artifact@v2
               with:
                 name: gpac-ubuntu-docker-image
-                path: /artifacts
+                path: ~/artifacts
                 retention-days: 1
 
 
@@ -47,10 +47,10 @@ jobs:
               uses: actions/download-artifact@v2
               with:
                 name: docker-artifact
-                path: /artifacts
+                path: ~/artifacts
 
             - name: Docker load
-              run: ls -lR /artifacts ; docker load < /artifacts/gpac-ubuntu-docker-image.tar
+              run: ls -lR ~/artifacts ; docker load < ~/artifacts/gpac-ubuntu-docker-image.tar
 
             - name: check docker images
               run: docker image list
