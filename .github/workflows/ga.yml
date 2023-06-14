@@ -8,7 +8,9 @@ jobs:
         if:  ${{ github.ref == 'refs/heads/docker' && github.event_name == 'push' }}
         steps:
             - name: Check out code
-              uses: actions/checkout@master
+              uses: actions/checkout@v3
+              with:
+                fetch-depth: 0
             - name: build image
               run: docker build -t gpac-ubuntu -f build/docker/ubuntu.Dockerfile .
             - name: check docker images
@@ -28,6 +30,6 @@ jobs:
         if:  ${{ github.ref != 'refs/heads/docker' || github.event_name != 'push' }}
         steps:
             - name: Check out code
-              uses: actions/checkout@master
+              uses: actions/checkout@v3
             - name: build image
               run: docker build -t gpac-ubuntu -f build/docker/ubuntu.Dockerfile .
