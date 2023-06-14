@@ -46,4 +46,4 @@ RUN dpkg -i /gpac/binaries/*.deb
 
 
 
-CMD ["gpac", "-version"]
+CMD ["gpac"]
