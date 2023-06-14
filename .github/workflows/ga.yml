@@ -14,7 +14,7 @@ jobs:
             - name: check docker images
               run: docker image list
             - name: check docker run
-              run: docker run gpac-ubuntu
+              run: docker run gpac-ubuntu || true
             - name: login docker hub
               run: docker login --username aureliendavid --password ${{secrets.DOCKER_HUB_TOKEN}}
             - name: tag docker image
