@@ -13,6 +13,8 @@ jobs:
               run: docker build -t gpac-ubuntu -f build/docker/ubuntu.Dockerfile .
             - name: check docker images
               run: docker image list
+            - name: check docker run
+              run: docker run gpac-ubuntu
             - name: login docker hub
               run: docker login --username aureliendavid --password ${{secrets.DOCKER_HUB_TOKEN}}
             - name: tag docker image
