@@ -94,7 +94,7 @@ err:
 
 static GF_Err BM_ParseMultipleReplace(GF_BifsDecoder *codec, GF_BitStream *bs, GF_List *com_list)
 {
-	u32 i, numFields, index, flag, nbBits, field_ref, fieldind;
+	u32 i, numFields, index, flag, nbBits, field_ref, fieldind, nbBufs, nbBufsEnd;
 	GF_Err e;
 	GF_FieldInfo field;
 	u32 NodeID;
@@ -110,6 +110,7 @@ static GF_Err BM_ParseMultipleReplace(GF_BifsDecoder *codec, GF_BitStream *bs, G
 	com = gf_sg_command_new(codec->current_graph, GF_SG_MULTIPLE_REPLACE);
 	BM_SetCommandNode(com, node);
 	flag = gf_bs_read_int(bs, 1);
+	nbBufs = gf_list_count(codec->command_buffers);
 	if (flag) {
 		numFields = gf_node_get_num_fields_in_mode(node, GF_SG_FIELD_CODING_DEF);
 		for (i=0; i<numFields; i++) {
@@ -158,7 +159,27 @@ static GF_Err BM_ParseMultipleReplace(GF_BifsDecoder *codec, GF_BitStream *bs, G
 
 
 exit:
-	if (e) gf_sg_command_del(com);
+	if (e) {
+
+		// the decoding of previous fields may have created command buffers in the codec
+		// but the related fields are going to be freed when deleting the com object
+		// so we remove the added buffers from the list to prevent use-after-free
+		nbBufsEnd = gf_list_count(codec->command_buffers);
+		while (nbBufsEnd > nbBufs) {
+
+			CommandBufferItem *cbi;
+			u32 idx = nbBufsEnd-1;
+
+			cbi = (CommandBufferItem *)gf_list_get(codec->command_buffers, idx);
+			gf_list_rem(codec->command_buffers, idx);
+			if (cbi->node)
+				gf_node_unregister(cbi->node, NULL);
+			gf_free(cbi);
+			nbBufsEnd--;
+		}
+
+		gf_sg_command_del(com);
+	}
 	else gf_list_add(com_list, com);
 	return e;
 }
@@ -1063,4 +1084,3 @@ GF_Err gf_bifs_decode_command_list(GF_BifsDecoder *codec, u16 ESID, u8 *data, u3
 }
 
 #endif /*GPAC_DISABLE_BIFS*/
-
