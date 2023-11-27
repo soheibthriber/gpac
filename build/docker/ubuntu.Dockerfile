@@ -19,18 +19,12 @@ RUN rm -rf /gpac/binaries && mkdir -p /gpac/binaries && cp -vf bin/gcc/* /gpac/b
 
 
 # deb package
-RUN rm -f *.deb && echo 7 > debian/compat && make distclean && make deb
+RUN rm -f *.deb && make distclean && make deb
 RUN mv -v *.deb /gpac/binaries/
 
 
 #install
 RUN dpkg -i /gpac/binaries/*.deb
-
-# work build
-# RUN make distclean
-# RUN ./configure
-# RUN make -j
-# RUN make install
 
 
 CMD ["gpac"]
