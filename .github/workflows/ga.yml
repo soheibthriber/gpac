@@ -18,11 +18,11 @@ jobs:
             - name: check docker run
               run: docker run gpac-ubuntu || true
             - name: login docker hub
-              run: docker login --username aureliendavid --password ${{secrets.DOCKER_HUB_TOKEN}}
+              run: docker login --username gpac  --password ${{secrets.DOCKER_HUB_TOKEN}}
             - name: tag docker image
-              run: docker tag gpac-ubuntu aureliendavid/gpac-ubuntu:latest
+              run: docker tag gpac-ubuntu gpac/ubuntu:latest
             - name: push docker image
-              run: docker push aureliendavid/gpac-ubuntu:latest
+              run: docker push gpac/ubuntu:latest
 
 
     other-builds:

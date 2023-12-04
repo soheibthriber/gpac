@@ -1,4 +1,4 @@
-FROM aureliendavid/gpac-ubuntu-deps:latest as dev
+FROM gpac/ubuntu-deps:latest
 
 
 WORKDIR /gpac
