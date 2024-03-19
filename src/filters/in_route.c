@@ -300,6 +300,7 @@ static GF_FilterProbeScore routein_probe_url(const char *url, const char *mime)
 {
 	if (!strnicmp(url, "atsc://", 7)) return GF_FPROBE_SUPPORTED;
 	if (!strnicmp(url, "route://", 8)) return GF_FPROBE_SUPPORTED;
+	if (!strnicmp(url, "flute://", 8)) return GF_FPROBE_SUPPORTED;
 	return GF_FPROBE_NOT_SUPPORTED;
 }
 
@@ -762,6 +763,7 @@ static GF_Err routein_process(GF_Filter *filter)
 		}
 	}
 
+
 	if (ctx->stats) {
 		u32 now = gf_sys_clock() - ctx->start_time;
 		if (now >= ctx->nb_stats*ctx->stats) {
@@ -793,12 +795,16 @@ static GF_Err routein_process(GF_Filter *filter)
 static GF_Err routein_initialize(GF_Filter *filter)
 {
 	Bool is_atsc = GF_TRUE;
+	Bool is_flute = GF_FALSE;
 	ROUTEInCtx *ctx = gf_filter_get_udta(filter);
 	ctx->filter = filter;
 
 	if (!ctx->src) return GF_BAD_PARAM;
 	if (!strncmp(ctx->src, "route://", 8)) {
 		is_atsc = GF_FALSE;
+	} else if (!strncmp(ctx->src, "flute://", 8)){
+		is_atsc = GF_FALSE;
+		is_flute = GF_TRUE;
 	} else if (strcmp(ctx->src, "atsc://"))
 		return GF_BAD_PARAM;
 
@@ -838,7 +844,7 @@ static GF_Err routein_initialize(GF_Filter *filter)
 			sep[0] = ':';
 			return GF_BAD_PARAM;
 		}
-		ctx->route_dmx = gf_route_dmx_new_ex(ctx->src+8, port, ctx->ifce, ctx->buffer, gf_filter_get_netcap_id(filter), routein_on_event, ctx);
+		ctx->route_dmx = gf_route_dmx_new_ex(ctx->src+8, port, ctx->ifce, ctx->buffer, gf_filter_get_netcap_id(filter), routein_on_event, ctx, is_flute);
 		sep[0] = ':';
 	}
 	if (!ctx->route_dmx) return GF_SERVICE_ERROR;

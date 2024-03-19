@@ -171,6 +171,8 @@ struct __gf_routedmx {
     //for now use a single mutex for all blob access
     GF_Mutex *blob_mx;
 
+	Bool is_flute;
+
 };
 
 static void gf_route_static_files_del(GF_List *files)
@@ -255,7 +257,7 @@ void gf_route_dmx_del(GF_ROUTEDmx *routedmx)
 
 static GF_ROUTEDmx *gf_route_dmx_new_internal(const char *ifce, u32 sock_buffer_size, const char *netcap_id, Bool is_atsc,
 							  void (*on_event)(void *udta, GF_ROUTEEventType evt, u32 evt_param, GF_ROUTEEventFileInfo *info),
-							  void *udta)
+							  void *udta, Bool is_flute)
 {
 	GF_ROUTEDmx *routedmx;
 	GF_Err e;
@@ -321,6 +323,8 @@ static GF_ROUTEDmx *gf_route_dmx_new_internal(const char *ifce, u32 sock_buffer_
 
 	routedmx->on_event = on_event;
 	routedmx->udta = udta;
+
+	routedmx->is_flute = is_flute;
 
 	if (!is_atsc)
 		return routedmx;
@@ -424,14 +428,14 @@ GF_ROUTEDmx *gf_route_atsc_dmx_new(const char *ifce, u32 sock_buffer_size,
 								   void (*on_event)(void *udta, GF_ROUTEEventType evt, u32 evt_param, GF_ROUTEEventFileInfo *info),
 								   void *udta)
 {
-	return gf_route_dmx_new_internal(ifce, sock_buffer_size, NULL, GF_TRUE, on_event, udta);
+	return gf_route_dmx_new_internal(ifce, sock_buffer_size, NULL, GF_TRUE, on_event, udta, GF_FALSE);
 }
 GF_EXPORT
 GF_ROUTEDmx *gf_route_dmx_new(const char *ip, u32 port, const char *ifce, u32 sock_buffer_size,
 							  void (*on_event)(void *udta, GF_ROUTEEventType evt, u32 evt_param, GF_ROUTEEventFileInfo *info),
-							  void *udta)
+							  void *udta, Bool is_flute)
 {
-	GF_ROUTEDmx *routedmx = gf_route_dmx_new_internal(ifce, sock_buffer_size, NULL, GF_FALSE, on_event, udta);
+	GF_ROUTEDmx *routedmx = gf_route_dmx_new_internal(ifce, sock_buffer_size, NULL, GF_FALSE, on_event, udta, GF_FALSE);
 	if (!routedmx) return NULL;
 	gf_route_create_service(routedmx, ip, port, 1, 1);
 	return routedmx;
@@ -443,14 +447,14 @@ GF_ROUTEDmx *gf_route_atsc_dmx_new_ex(const char *ifce, u32 sock_buffer_size, co
 								   void (*on_event)(void *udta, GF_ROUTEEventType evt, u32 evt_param, GF_ROUTEEventFileInfo *info),
 								   void *udta)
 {
-	return gf_route_dmx_new_internal(ifce, sock_buffer_size, netcap_id, GF_TRUE, on_event, udta);
+	return gf_route_dmx_new_internal(ifce, sock_buffer_size, netcap_id, GF_TRUE, on_event, udta, GF_FALSE);
 }
 GF_EXPORT
 GF_ROUTEDmx *gf_route_dmx_new_ex(const char *ip, u32 port, const char *ifce, u32 sock_buffer_size, const char *netcap_id,
 							  void (*on_event)(void *udta, GF_ROUTEEventType evt, u32 evt_param, GF_ROUTEEventFileInfo *info),
-							  void *udta)
+							  void *udta, Bool is_flute)
 {
-	GF_ROUTEDmx *routedmx = gf_route_dmx_new_internal(ifce, sock_buffer_size, netcap_id, GF_FALSE, on_event, udta);
+	GF_ROUTEDmx *routedmx = gf_route_dmx_new_internal(ifce, sock_buffer_size, netcap_id, GF_FALSE, on_event, udta, is_flute);
 	if (!routedmx) return NULL;
 	gf_route_create_service(routedmx, ip, port, 1, 1);
 	return routedmx;
@@ -1815,6 +1819,226 @@ static GF_Err gf_route_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 	return GF_OK;
 }
 
+static GF_Err gf_flute_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEService *s, GF_ROUTESession *route_sess)
+{
+	GF_Err e;
+	u32 nb_read, v, C, psi, S, O, H, /*Res, A,*/ B, hdr_len, cp, cc, tsi, toi, pos;
+	u32 /*a_G=0, a_U=0,*/ a_S=0, a_M=0/*, a_A=0, a_H=0, a_D=0*/;
+	u64 tol_size=0;
+	Bool in_order = GF_TRUE;
+	u32 start_offset;
+	GF_ROUTELCTChannel *rlct=NULL;
+	GF_LCTObject *gather_object=NULL;
+
+	if (route_sess) {
+		e = gf_sk_receive_no_select(route_sess->sock, routedmx->buffer, routedmx->buffer_size, &nb_read);
+	} else {
+		e = gf_sk_receive_no_select(s->sock, routedmx->buffer, routedmx->buffer_size, &nb_read);
+	}
+
+	if (e != GF_OK) return e;
+	gf_assert(nb_read);
+
+	routedmx->nb_packets++;
+	routedmx->total_bytes_recv += nb_read;
+	routedmx->last_pck_time = gf_sys_clock_high_res();
+	if (!routedmx->first_pck_time) routedmx->first_pck_time = routedmx->last_pck_time;
+
+	e = gf_bs_reassign_buffer(routedmx->bs, routedmx->buffer, nb_read);
+	if (e != GF_OK) return e;
+
+	//parse LCT header
+	v = gf_bs_read_int(routedmx->bs, 4);
+	C = gf_bs_read_int(routedmx->bs, 2);
+	psi = gf_bs_read_int(routedmx->bs, 2);
+	S = gf_bs_read_int(routedmx->bs, 1);
+	O = gf_bs_read_int(routedmx->bs, 2);
+	H = gf_bs_read_int(routedmx->bs, 1);
+	/*Res = */gf_bs_read_int(routedmx->bs, 2);
+	/*A = */gf_bs_read_int(routedmx->bs, 1);
+	B = gf_bs_read_int(routedmx->bs, 1);
+	hdr_len = gf_bs_read_int(routedmx->bs, 8);
+	cp = gf_bs_read_int(routedmx->bs, 8);
+
+	if (v!=1) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_ROUTE, ("[FLUTE] Service %d : wrong LCT header version %d, expecting 1\n", s->service_id, v));
+		return GF_NON_COMPLIANT_BITSTREAM;
+	}
+	else if (C!=0) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_ROUTE, ("[FLUTE] Service %d : wrong FLUTE LCT header C %d, expecting 0\n", s->service_id, C));
+		return GF_NON_COMPLIANT_BITSTREAM;
+	}
+	else if ((psi!=0) && (psi!=2) ) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_ROUTE, ("[FLUTE] Service %d : wrong FLUTE LCT header PSI %d, expecting b00 or b10\n", s->service_id, psi));
+		return GF_NON_COMPLIANT_BITSTREAM;
+	}
+	else if (S!=0) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_ROUTE, ("[FLUTE] Service %d : wrong FLUTE LCT header S, should be 0\n", s->service_id));
+		return GF_NON_COMPLIANT_BITSTREAM;
+	}
+	else if (O!=0) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_ROUTE, ("[ROUTE] Service %d : wrong FLUTE LCT header O, should be 0\n", s->service_id));
+		return GF_NON_COMPLIANT_BITSTREAM;
+	}
+	else if (H!=1) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_ROUTE, ("[FLUTE] Service %d : wrong FLUTE LCT header H, should be 1\n", s->service_id));
+		return GF_NON_COMPLIANT_BITSTREAM;
+	}
+	if (hdr_len<3) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_ROUTE, ("[FLUTE] Service %d : wrong FLUTE LCT header len %d, should be at least 3\n", s->service_id, hdr_len));
+		return GF_NON_COMPLIANT_BITSTREAM;
+	}
+	
+	// if (psi==0) {
+	// 	GF_LOG(GF_LOG_WARNING, GF_LOG_ROUTE, ("[ROUTE] Service %d : FEC ROUTE not implemented\n", s->service_id));
+	// 	return GF_NOT_SUPPORTED;
+	// }
+
+	cc = gf_bs_read_u32(routedmx->bs);
+	tsi = gf_bs_read_u16(routedmx->bs);
+	toi = gf_bs_read_u16(routedmx->bs);
+	hdr_len-=3;
+
+	//filter TSI if not 0 (service TSI) and debug mode set
+	if (routedmx->debug_tsi && tsi && (tsi!=routedmx->debug_tsi)) return GF_OK;
+
+	//look for TSI 0 first
+	if (tsi!=0) {
+		Bool cp_found = GF_FALSE;
+		u32 i=0;
+		Bool in_session = GF_FALSE;
+		if (s->tune_mode==GF_ROUTE_TUNE_SLS_ONLY) return GF_OK;
+
+		if (s->last_active_obj && (s->last_active_obj->tsi==tsi)) {
+			in_session = GF_TRUE;
+			rlct = s->last_active_obj->rlct;
+		} else {
+			GF_ROUTESession *rsess;
+			i=0;
+			while ((rsess = gf_list_enum(s->route_sessions, &i))) {
+				u32 j=0;
+				while ((rlct = gf_list_enum(rsess->channels, &j))) {
+					if (rlct->tsi == tsi) {
+						in_session = GF_TRUE;
+						break;
+					}
+					rlct = NULL;
+				}
+				if (in_session) break;
+			}
+		}
+		if (!in_session) {
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : no session with TSI %u defined, skipping packet (TOI %u)\n", s->service_id, tsi, toi));
+			return GF_OK;
+		}
+		for (i=0; rlct && i<rlct->nb_cps; i++) {
+			if (rlct->CPs[i].codepoint==cp) {
+				in_order = rlct->CPs[i].order;
+				cp_found = GF_TRUE;
+				break;
+			}
+		}
+		if (!cp_found) {
+			if ((cp==0) || (cp==2) || (cp>=9) ) {
+				GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : unsupported code point %d, skipping packet (TOI %u)\n", s->service_id, cp, toi));
+				return GF_OK;
+			}
+		}
+	} else {
+		//check TOI for TSI 0
+		//a_G = (toi & 0x80000000) /*(1<<31)*/ ? 1 : 0;
+		//a_U = (toi & (1<<16)) ? 1 : 0;
+		a_S = (toi & (1<<17)) ? 1 : 0;
+		a_M = (toi & (1<<18)) ? 1 : 0;
+		/*a_A = (toi & (1<<19)) ? 1 : 0;
+		a_H = (toi & (1<<22)) ? 1 : 0;
+		a_D = (toi & (1<<23)) ? 1 : 0;*/
+		v = toi & 0xFF;
+		//skip known version
+		if (a_M && (s->mpd_version == v+1)) a_M = 0;
+		if (a_S && (s->stsid_version == v+1)) a_S = 0;
+
+
+		//for now we only care about S and M
+		if (!a_S && !a_M) {
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : SLT bundle without MPD or S-TSID, skipping packet\n", s->service_id));
+			return GF_OK;
+		}
+	}
+
+	//parse extensions
+	while (hdr_len) {
+		u8 het = gf_bs_read_u8(routedmx->bs);
+		u8 hel ;
+
+		if (het==64) hel = gf_bs_read_u8(routedmx->bs);
+
+		switch (het) {
+		case GF_LCT_EXT_FDT:
+			u8 flute_version = gf_bs_read_int(routedmx->bs, 4);
+			u16 fdt_instance_id = gf_bs_read_int(routedmx->bs, 20);
+			(void) (flute_version);
+			(void) (fdt_instance_id);
+			break;
+
+		case GF_LCT_EXT_FTI:
+			u64 transfert_length = gf_bs_read_int(routedmx->bs, 48);
+			u16 Fec_instance_ID = gf_bs_read_int(routedmx->bs, 16);
+			u16 Encoding_symbol_length = gf_bs_read_int(routedmx->bs, 16);
+            u32 Maximum_source_block_length = gf_bs_read_int(routedmx->bs, 32);
+			(void) (transfert_length);
+			(void) (Fec_instance_ID);
+			(void) (Encoding_symbol_length);
+			(void) (Maximum_source_block_length);
+			break;
+
+		default:
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : unsupported header extension HEL %d HET %d, ignoring\n", s->service_id, hel, het));
+			break;
+		}
+		if (hdr_len<hel) {
+			GF_LOG(GF_LOG_WARNING, GF_LOG_ROUTE, ("[ROUTE] Service %d : wrong HEL %d for LCT extension %d, remaining header size %d\n", s->service_id, hel, het, hdr_len));
+			continue;
+		}
+		if (hel) hdr_len -= hel;
+		else hdr_len -= 1;
+	}
+
+	start_offset = gf_bs_read_u32(routedmx->bs);
+	pos = (u32) gf_bs_get_position(routedmx->bs);
+
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : LCT packet TSI %u TOI %u size %d startOffset %u TOL "LLU" (PckNum %d)\n", s->service_id, tsi, toi, nb_read-pos, start_offset, tol_size, routedmx->nb_packets));
+
+	e = gf_route_service_gather_object(routedmx, s, tsi, toi, start_offset, routedmx->buffer + pos, nb_read-pos, (u32) tol_size, B, in_order, rlct, &gather_object);
+
+	if (e==GF_EOS) {
+		if (!tsi) {
+			if (gather_object->status==GF_LCT_OBJ_DONE_ERR) {
+				s->last_dispatched_toi_on_tsi_zero=0;
+				gf_route_obj_to_reservoir(routedmx, s, gather_object);
+				return GF_OK;
+			}
+			//we don't assign version here, we use mbms envelope for that since the bundle may have several
+			//packages
+
+			e = gf_route_dmx_process_service_signaling(routedmx, s, gather_object, cc, a_S ? v : 0, a_M ? v : 0);
+			//we don't release the LCT object, so that we can discard future versions
+			if(e) {
+				//ignore this object in order to be able to accept future versions
+				s->last_dispatched_toi_on_tsi_zero=0;
+				s->stsid_version = 0;
+				s->stsid_crc = 0;
+				s->mpd_version = 0;
+				gf_route_obj_to_reservoir(routedmx, s, gather_object);
+			}
+		} else {
+			gf_route_dmx_process_object(routedmx, s, gather_object);
+		}
+	}
+
+	return GF_OK;
+}
+
 static GF_Err gf_route_dmx_process_lls(GF_ROUTEDmx *routedmx)
 {
 	u32 read;
@@ -1924,7 +2148,10 @@ GF_Err gf_route_dmx_process(GF_ROUTEDmx *routedmx)
 		if (s->tune_mode==GF_ROUTE_TUNE_OFF) continue;
 
 		if (gf_sk_group_sock_is_set(routedmx->active_sockets, s->sock, GF_SK_SELECT_READ)) {
-			e = gf_route_dmx_process_service(routedmx, s, NULL);
+			if(routedmx->is_flute){
+			e = gf_flute_dmx_process_service(routedmx, s, NULL);	
+			}else { 
+			e = gf_route_dmx_process_service(routedmx, s, NULL);}
 			if (e) return e;
 		}
 		if (s->tune_mode!=GF_ROUTE_TUNE_ON) continue;
@@ -1933,7 +2160,10 @@ GF_Err gf_route_dmx_process(GF_ROUTEDmx *routedmx)
 		j=0;
 		while ((rsess = (GF_ROUTESession *)gf_list_enum(s->route_sessions, &j) )) {
 			if (gf_sk_group_sock_is_set(routedmx->active_sockets, rsess->sock, GF_SK_SELECT_READ)) {
-				e = gf_route_dmx_process_service(routedmx, s, rsess);
+				if(routedmx->is_flute){
+				e = gf_flute_dmx_process_service(routedmx, s, rsess);
+				}else {
+				e = gf_route_dmx_process_service(routedmx, s, rsess);}
 				if (e) return e;
 			}
 		}

@@ -170,7 +170,7 @@ GF_ROUTEDmx *gf_route_atsc_dmx_new_ex(const char *ifce, u32 sock_buffer_size, co
 \param udta the user data passed back by the callback
 \return the ROUTE demultiplexer created
 */
-GF_ROUTEDmx *gf_route_dmx_new(const char *ip, u32 port, const char *ifce, u32 sock_buffer_size, void (*on_event)(void *udta, GF_ROUTEEventType evt, u32 evt_param, GF_ROUTEEventFileInfo *finfo), void *udta);
+GF_ROUTEDmx *gf_route_dmx_new(const char *ip, u32 port, const char *ifce, u32 sock_buffer_size, void (*on_event)(void *udta, GF_ROUTEEventType evt, u32 evt_param, GF_ROUTEEventFileInfo *finfo), void *udta, Bool is_flute);
 
 
 /*! Creates a new ROUTE demultiplexer
@@ -183,7 +183,7 @@ GF_ROUTEDmx *gf_route_dmx_new(const char *ip, u32 port, const char *ifce, u32 so
 \param udta the user data passed back by the callback
 \return the ROUTE demultiplexer created
 */
-GF_ROUTEDmx *gf_route_dmx_new_ex(const char *ip, u32 port, const char *ifce, u32 sock_buffer_size, const char *netcap_id, void (*on_event)(void *udta, GF_ROUTEEventType evt, u32 evt_param, GF_ROUTEEventFileInfo *finfo), void *udta);
+GF_ROUTEDmx *gf_route_dmx_new_ex(const char *ip, u32 port, const char *ifce, u32 sock_buffer_size, const char *netcap_id, void (*on_event)(void *udta, GF_ROUTEEventType evt, u32 evt_param, GF_ROUTEEventFileInfo *finfo), void *udta, Bool is_flute);
 
 /*! Deletes an ROUTE demultiplexer
 \param routedmx the ROUTE demultiplexer to delete
