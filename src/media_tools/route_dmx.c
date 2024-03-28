@@ -97,6 +97,21 @@ typedef struct
 	void *udta;
 } GF_LCTObject;
 
+typedef struct {
+    u32 toi;
+    char *content_location;
+    u32 content_length;
+    char *content_type;
+    u32 media_sequence;
+    u32 FEC_OTI_FEC_Encoding_ID;
+    u32 FEC_OTI_Maximum_Source_Block_Length;
+    u32 FEC_OTI_Encoding_Symbol_Length;
+} FDT_File;
+
+typedef struct {
+    u32 expires;
+    FDT_File file;
+} FDT_Instance;
 
 
 typedef struct
@@ -668,7 +683,7 @@ static GF_Err gf_route_dmx_push_object(GF_ROUTEDmx *routedmx, GF_ROUTEService *s
     if (routedmx->on_event) {
         GF_ROUTEEventType evt_type;
         GF_ROUTEEventFileInfo finfo;
-        memset(&finfo, 0, sizeof(GF_ROUTEEventFileInfo));
+        memset(&finfo, 0,sizeof(GF_ROUTEEventFileInfo));
         finfo.filename = filepath;
 		obj->blob.data = obj->payload;
 		obj->blob.flags = 0;
@@ -763,8 +778,9 @@ static GF_Err gf_route_service_flush_object(GF_ROUTEService *s, GF_LCTObject *ob
 	obj->download_time_ms = gf_sys_clock() - obj->download_time_ms;
 	return GF_EOS;
 }
+static GF_Err gf_flute_dmx_process_service_signaling(GF_ROUTEDmx *routedmx, GF_ROUTEService *s, GF_LCTObject *object);
 
-static GF_Err gf_route_service_gather_object(GF_ROUTEDmx *routedmx, GF_ROUTEService *s, u32 tsi, u32 toi, u32 start_offset, char *data, u32 size, u32 total_len, Bool close_flag, Bool in_order, GF_ROUTELCTChannel *rlct, GF_LCTObject **gather_obj)
+static GF_Err gf_route_service_gather_object(GF_ROUTEDmx *routedmx, GF_ROUTEService *s, u32 tsi, u32 toi, u32 start_offset, char *data, u32 size, u32 total_len, Bool close_flag, Bool in_order, GF_ROUTELCTChannel *rlct, GF_LCTObject **gather_obj, Bool is_flute , Bool is_fdt_packet)
 {
 	Bool done;
 	u32 i, count;
@@ -781,7 +797,7 @@ static GF_Err gf_route_service_gather_object(GF_ROUTEDmx *routedmx, GF_ROUTEServ
 			return GF_OK;
 		}
 	} else {
-		if (!tsi && (toi==s->last_dispatched_toi_on_tsi_zero)) {
+		if (!tsi && (toi==s->last_dispatched_toi_on_tsi_zero && !is_flute)) {
 			GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d TSI %u TOI %u LCT fragment on already dispatched object, skipping\n", s->service_id, tsi, toi));
 			return GF_OK;
 		}
@@ -1038,6 +1054,11 @@ static GF_Err gf_route_service_gather_object(GF_ROUTEDmx *routedmx, GF_ROUTEServ
 	gf_assert(obj->toi == toi);
 	gf_assert(obj->tsi == tsi);
     
+	// if this flute and its an FDT packet parse the fdt and associate the object with the TOI
+	if (is_flute && is_fdt_packet){
+		gf_flute_dmx_process_service_signaling(routedmx, s, obj);
+	}
+
     //not a file (uses templates->segment) and can push
     if (do_push && !obj->rlct_file && obj->rlct) {
         gf_route_dmx_push_object(routedmx, s, obj, GF_FALSE, GF_TRUE, GF_FALSE, obj->frags[0].size);
@@ -1596,6 +1617,133 @@ static GF_Err gf_route_dmx_process_service_signaling(GF_ROUTEDmx *routedmx, GF_R
 	}
 }
 
+static GF_Err gf_flute_dmx_process_service_signaling(GF_ROUTEDmx *routedmx, GF_ROUTEService *s, GF_LCTObject *object)
+{
+	char *payload;
+	u32 payload_size;
+
+	payload = object->payload;
+    payload_size = object->total_length;
+    // Verifying that the payload is not erroneously treated as plaintext
+    if (!isprint(payload[0])) {
+        GF_LOG(GF_LOG_WARNING, GF_LOG_ROUTE, ("[ROUTE] Service %d package appears to be compressed but is being treated as plaintext:\n%s\n", s->service_id, payload));
+    }
+    payload[payload_size] = 0;
+
+    // Print the original payload
+    GF_LOG(GF_LOG_INFO, GF_LOG_ROUTE, ("[FLUTE] Service %d got TOI 0 config package:\n%s\n", s->service_id, payload));
+
+    // Parsing the XML payload to extract content
+    const char *start_tag = "<FDT-Instance";
+    const char *end_tag = "</FDT-Instance>";
+    const char *start = strstr(payload, start_tag);
+    const char *end = strstr(payload, end_tag);
+
+    if (start && end) {
+        // Extracting content between start and end tags
+        size_t content_length = end - start + strlen(end_tag);
+        char *xml_content = (char *)malloc(content_length + 1);
+        if (!xml_content) {
+            return GF_OUT_OF_MEM;
+        }
+        strncpy(xml_content, start, content_length);
+        xml_content[content_length] = '\0';
+
+        // For now, let's print it
+        GF_LOG(GF_LOG_INFO, GF_LOG_ROUTE, ("Extracted XML content:\n%s\n", xml_content));
+
+ // Initialize FDT instance
+        FDT_Instance instance;
+        memset(&instance, 0, sizeof(FDT_Instance));
+
+        // Parse XML content to extract fields
+        char *location_start = strstr(xml_content, "Content-Location=\"");
+        if (location_start) {
+            location_start += strlen("Content-Location=\"");
+            char *location_end = strchr(location_start, '\"');
+            if (location_end) {
+                size_t location_length = location_end - location_start;
+                instance.file.content_location = (char *)malloc(location_length + 1);
+                if (!instance.file.content_location) {
+                    free(xml_content);
+                    return GF_OUT_OF_MEM;
+                }
+                strncpy(instance.file.content_location, location_start, location_length);
+                instance.file.content_location[location_length] = '\0';
+            }
+        }
+
+        char *type_start = strstr(xml_content, "Content-Type=\"");
+        if (type_start) {
+            type_start += strlen("Content-Type=\"");
+            char *type_end = strchr(type_start, '\"');
+            if (type_end) {
+                size_t type_length = type_end - type_start;
+                instance.file.content_type = (char *)malloc(type_length + 1);
+                if (!instance.file.content_type) {
+                    free(instance.file.content_location);
+                    free(xml_content);
+                    return GF_OUT_OF_MEM;
+                }
+                strncpy(instance.file.content_type, type_start, type_length);
+                instance.file.content_type[type_length] = '\0';
+            }
+        }
+
+        // Parse TOI
+        const char *toi_start = strstr(xml_content, "TOI=\"");
+        if (toi_start) {
+            toi_start += strlen("TOI=\"");
+            instance.file.toi = atoi(toi_start);
+        }
+
+        // Parse Content-Length
+        const char *length_start = strstr(xml_content, "Content-Length=\"");
+        if (length_start) {
+            length_start += strlen("Content-Length=\"");
+            instance.file.content_length = atoi(length_start);
+        }
+
+        // Parse Media-Sequence
+        const char *sequence_start = strstr(xml_content, "Media-Sequence=\"");
+        if (sequence_start) {
+            sequence_start += strlen("Media-Sequence=\"");
+            instance.file.media_sequence = atoi(sequence_start);
+        }
+
+        // Parse FEC-OTI-FEC-Encoding-ID
+        const char *fec_id_start = strstr(xml_content, "FEC-OTI-FEC-Encoding-ID=\"");
+        if (fec_id_start) {
+            fec_id_start += strlen("FEC-OTI-FEC-Encoding-ID=\"");
+            instance.file.FEC_OTI_FEC_Encoding_ID = atoi(fec_id_start);
+        }
+
+        // Parse FEC-OTI-Maximum-Source-Block-Length
+        const char *block_length_start = strstr(xml_content, "FEC-OTI-Maximum-Source-Block-Length=\"");
+        if (block_length_start) {
+            block_length_start += strlen("FEC-OTI-Maximum-Source-Block-Length=\"");
+            instance.file.FEC_OTI_Maximum_Source_Block_Length = atoi(block_length_start);
+        }
+
+        // Parse FEC-OTI-Encoding-Symbol-Length
+        const char *symbol_length_start = strstr(xml_content, "FEC-OTI-Encoding-Symbol-Length=\"");
+        if (symbol_length_start) {
+            symbol_length_start += strlen("FEC-OTI-Encoding-Symbol-Length=\"");
+            instance.file.FEC_OTI_Encoding_Symbol_Length = atoi(symbol_length_start);
+        }
+
+
+        free(xml_content);
+    } else {
+        // Error: Couldn't find start or end tags
+        GF_LOG(GF_LOG_ERROR, GF_LOG_ROUTE, ("[ROUTE] Service %d Unable to extract XML content from package:\n%s\n", s->service_id, payload));
+        return GF_NON_COMPLIANT_BITSTREAM;
+    }
+
+    return GF_OK;
+	
+}
+
 
 static GF_Err gf_route_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEService *s, GF_ROUTESession *route_sess)
 {
@@ -1789,7 +1937,7 @@ static GF_Err gf_route_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : LCT packet TSI %u TOI %u size %d startOffset %u TOL "LLU" (PckNum %d)\n", s->service_id, tsi, toi, nb_read-pos, start_offset, tol_size, routedmx->nb_packets));
 
-	e = gf_route_service_gather_object(routedmx, s, tsi, toi, start_offset, routedmx->buffer + pos, nb_read-pos, (u32) tol_size, B, in_order, rlct, &gather_object);
+	e = gf_route_service_gather_object(routedmx, s, tsi, toi, start_offset, routedmx->buffer + pos, nb_read-pos, (u32) tol_size, B, in_order, rlct, &gather_object,GF_FALSE, GF_FALSE);
 
 	if (e==GF_EOS) {
 		if (!tsi) {
@@ -1825,10 +1973,12 @@ static GF_Err gf_flute_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 	u32 nb_read, v, C, psi, S, O, H, /*Res, A,*/ B, hdr_len, cp, cc, tsi, toi, pos;
 	u32 /*a_G=0, a_U=0,*/ a_S=0, a_M=0/*, a_A=0, a_H=0, a_D=0*/;
 	u64 tol_size=0;
-	Bool in_order = GF_TRUE;
-	u32 start_offset;
+	u64 transfert_length=0;
+	Bool in_order = GF_TRUE,is_fdt = GF_FALSE;
+	u32 start_offset=0;
 	GF_ROUTELCTChannel *rlct=NULL;
 	GF_LCTObject *gather_object=NULL;
+	u32 /*SBN,*/ESI; //Source Block Length  | Encoding Symbol  
 
 	if (route_sess) {
 		e = gf_sk_receive_no_select(route_sess->sock, routedmx->buffer, routedmx->buffer_size, &nb_read);
@@ -1899,90 +2049,24 @@ static GF_Err gf_flute_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 	toi = gf_bs_read_u16(routedmx->bs);
 	hdr_len-=3;
 
-	//filter TSI if not 0 (service TSI) and debug mode set
-	if (routedmx->debug_tsi && tsi && (tsi!=routedmx->debug_tsi)) return GF_OK;
-
-	//look for TSI 0 first
-	if (tsi!=0) {
-		Bool cp_found = GF_FALSE;
-		u32 i=0;
-		Bool in_session = GF_FALSE;
-		if (s->tune_mode==GF_ROUTE_TUNE_SLS_ONLY) return GF_OK;
-
-		if (s->last_active_obj && (s->last_active_obj->tsi==tsi)) {
-			in_session = GF_TRUE;
-			rlct = s->last_active_obj->rlct;
-		} else {
-			GF_ROUTESession *rsess;
-			i=0;
-			while ((rsess = gf_list_enum(s->route_sessions, &i))) {
-				u32 j=0;
-				while ((rlct = gf_list_enum(rsess->channels, &j))) {
-					if (rlct->tsi == tsi) {
-						in_session = GF_TRUE;
-						break;
-					}
-					rlct = NULL;
-				}
-				if (in_session) break;
-			}
-		}
-		if (!in_session) {
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : no session with TSI %u defined, skipping packet (TOI %u)\n", s->service_id, tsi, toi));
-			return GF_OK;
-		}
-		for (i=0; rlct && i<rlct->nb_cps; i++) {
-			if (rlct->CPs[i].codepoint==cp) {
-				in_order = rlct->CPs[i].order;
-				cp_found = GF_TRUE;
-				break;
-			}
-		}
-		if (!cp_found) {
-			if ((cp==0) || (cp==2) || (cp>=9) ) {
-				GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : unsupported code point %d, skipping packet (TOI %u)\n", s->service_id, cp, toi));
-				return GF_OK;
-			}
-		}
-	} else {
-		//check TOI for TSI 0
-		//a_G = (toi & 0x80000000) /*(1<<31)*/ ? 1 : 0;
-		//a_U = (toi & (1<<16)) ? 1 : 0;
-		a_S = (toi & (1<<17)) ? 1 : 0;
-		a_M = (toi & (1<<18)) ? 1 : 0;
-		/*a_A = (toi & (1<<19)) ? 1 : 0;
-		a_H = (toi & (1<<22)) ? 1 : 0;
-		a_D = (toi & (1<<23)) ? 1 : 0;*/
-		v = toi & 0xFF;
-		//skip known version
-		if (a_M && (s->mpd_version == v+1)) a_M = 0;
-		if (a_S && (s->stsid_version == v+1)) a_S = 0;
-
-
-		//for now we only care about S and M
-		if (!a_S && !a_M) {
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : SLT bundle without MPD or S-TSID, skipping packet\n", s->service_id));
-			return GF_OK;
-		}
-	}
-
 	//parse extensions
 	while (hdr_len) {
+		is_fdt = GF_TRUE;
 		u8 het = gf_bs_read_u8(routedmx->bs);
-		u8 hel ;
+		u8 hel =0 ;
 
 		if (het==64) hel = gf_bs_read_u8(routedmx->bs);
 
 		switch (het) {
 		case GF_LCT_EXT_FDT:
-			u8 flute_version = gf_bs_read_int(routedmx->bs, 4);
+			u8 flute_version = gf_bs_read_int(routedmx->bs, 4); // TODO: add version verification, if different than 1
 			u16 fdt_instance_id = gf_bs_read_int(routedmx->bs, 20);
 			(void) (flute_version);
 			(void) (fdt_instance_id);
 			break;
 
 		case GF_LCT_EXT_FTI:
-			u64 transfert_length = gf_bs_read_int(routedmx->bs, 48);
+			transfert_length = gf_bs_read_int(routedmx->bs, 48);
 			u16 Fec_instance_ID = gf_bs_read_int(routedmx->bs, 16);
 			u16 Encoding_symbol_length = gf_bs_read_int(routedmx->bs, 16);
             u32 Maximum_source_block_length = gf_bs_read_int(routedmx->bs, 32);
@@ -2004,12 +2088,16 @@ static GF_Err gf_flute_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 		else hdr_len -= 1;
 	}
 
-	start_offset = gf_bs_read_u32(routedmx->bs);
+	/*SBN =(u32) */gf_bs_read_u16(routedmx->bs);
+	ESI = (u32) gf_bs_read_u16(routedmx->bs);
 	pos = (u32) gf_bs_get_position(routedmx->bs);
+	(void) cp;
+	(void) tol_size;
+	e = gf_route_service_gather_object(routedmx, s, tsi, toi, start_offset, routedmx->buffer + pos, nb_read-pos, (u32) transfert_length, B, in_order, rlct, &gather_object, GF_TRUE, is_fdt);
 
-	GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : LCT packet TSI %u TOI %u size %d startOffset %u TOL "LLU" (PckNum %d)\n", s->service_id, tsi, toi, nb_read-pos, start_offset, tol_size, routedmx->nb_packets));
-
-	e = gf_route_service_gather_object(routedmx, s, tsi, toi, start_offset, routedmx->buffer + pos, nb_read-pos, (u32) tol_size, B, in_order, rlct, &gather_object);
+	start_offset += (nb_read ) * ESI; 
+	
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : LCT packet TSI %u TOI %u size %d startOffset %u TOL "LLU" (PckNum %d)\n", s->service_id, tsi, toi, nb_read-pos, start_offset, transfert_length, routedmx->nb_packets));
 
 	if (e==GF_EOS) {
 		if (!tsi) {
