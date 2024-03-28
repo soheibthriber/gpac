@@ -97,6 +97,21 @@ typedef struct
 	void *udta;
 } GF_LCTObject;
 
+typedef struct {
+    u32 toi;
+    char Content_Location[256];//TODO change to dynamic alloc
+    u32 Content_Length;
+    char Content_Type[64];//TODO change to dynamic alloc
+    u32 Media_Sequence;
+    u32 FEC_OTI_FEC_Encoding_ID;
+    u32 FEC_OTI_Maximum_Source_Block_Length;
+    u32 FEC_OTI_Encoding_Symbol_Length;
+} FDT_File;
+
+typedef struct {
+    u32 Expires;
+    FDT_File file;
+} FDT_Instance;
 
 
 typedef struct
@@ -668,7 +683,7 @@ static GF_Err gf_route_dmx_push_object(GF_ROUTEDmx *routedmx, GF_ROUTEService *s
     if (routedmx->on_event) {
         GF_ROUTEEventType evt_type;
         GF_ROUTEEventFileInfo finfo;
-        memset(&finfo, 0, sizeof(GF_ROUTEEventFileInfo));
+        memset(&finfo, 0,sizeof(GF_ROUTEEventFileInfo));
         finfo.filename = filepath;
 		obj->blob.data = obj->payload;
 		obj->blob.flags = 0;
@@ -1825,10 +1840,12 @@ static GF_Err gf_flute_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 	u32 nb_read, v, C, psi, S, O, H, /*Res, A,*/ B, hdr_len, cp, cc, tsi, toi, pos;
 	u32 /*a_G=0, a_U=0,*/ a_S=0, a_M=0/*, a_A=0, a_H=0, a_D=0*/;
 	u64 tol_size=0;
+	u64 transfert_length=0;
 	Bool in_order = GF_TRUE;
-	u32 start_offset;
+	u32 start_offset=0;
 	GF_ROUTELCTChannel *rlct=NULL;
 	GF_LCTObject *gather_object=NULL;
+	u32 SBN,ESI; //Source Block Length  | Encoding Symbol  
 
 	if (route_sess) {
 		e = gf_sk_receive_no_select(route_sess->sock, routedmx->buffer, routedmx->buffer_size, &nb_read);
@@ -1927,6 +1944,7 @@ static GF_Err gf_flute_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 				if (in_session) break;
 			}
 		}
+		in_session = GF_TRUE;
 		if (!in_session) {
 			GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : no session with TSI %u defined, skipping packet (TOI %u)\n", s->service_id, tsi, toi));
 			return GF_OK;
@@ -1938,12 +1956,12 @@ static GF_Err gf_flute_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 				break;
 			}
 		}
-		if (!cp_found) {
-			if ((cp==0) || (cp==2) || (cp>=9) ) {
-				GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : unsupported code point %d, skipping packet (TOI %u)\n", s->service_id, cp, toi));
-				return GF_OK;
-			}
-		}
+		// if (!cp_found) {
+		// 	if ((cp==0) || (cp==2) || (cp>=9) ) {
+		// 		GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : unsupported code point %d, skipping packet (TOI %u)\n", s->service_id, cp, toi));
+		// 		return GF_OK;
+		// 	}
+		// }
 	} else {
 		//check TOI for TSI 0
 		//a_G = (toi & 0x80000000) /*(1<<31)*/ ? 1 : 0;
@@ -1960,10 +1978,10 @@ static GF_Err gf_flute_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 
 
 		//for now we only care about S and M
-		if (!a_S && !a_M) {
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : SLT bundle without MPD or S-TSID, skipping packet\n", s->service_id));
-			return GF_OK;
-		}
+		// if (!a_S && !a_M) {
+		// 	GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : SLT bundle without MPD or S-TSID, skipping packet\n", s->service_id));
+		// 	return GF_OK;
+		// }
 	}
 
 	//parse extensions
@@ -1982,7 +2000,7 @@ static GF_Err gf_flute_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 			break;
 
 		case GF_LCT_EXT_FTI:
-			u64 transfert_length = gf_bs_read_int(routedmx->bs, 48);
+			transfert_length = gf_bs_read_int(routedmx->bs, 48);
 			u16 Fec_instance_ID = gf_bs_read_int(routedmx->bs, 16);
 			u16 Encoding_symbol_length = gf_bs_read_int(routedmx->bs, 16);
             u32 Maximum_source_block_length = gf_bs_read_int(routedmx->bs, 32);
@@ -2004,12 +2022,15 @@ static GF_Err gf_flute_dmx_process_service(GF_ROUTEDmx *routedmx, GF_ROUTEServic
 		else hdr_len -= 1;
 	}
 
-	start_offset = gf_bs_read_u32(routedmx->bs);
+	SBN =(u32) gf_bs_read_u16(routedmx->bs);
+	ESI = (u32) gf_bs_read_u16(routedmx->bs);
 	pos = (u32) gf_bs_get_position(routedmx->bs);
+    if (toi==163){
+	transfert_length = 32626;}
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : LCT packet TSI %u TOI %u size %d startOffset %u TOL "LLU" (PckNum %d)\n", s->service_id, tsi, toi, nb_read-pos, start_offset, transfert_length, routedmx->nb_packets));
 
-	GF_LOG(GF_LOG_DEBUG, GF_LOG_ROUTE, ("[ROUTE] Service %d : LCT packet TSI %u TOI %u size %d startOffset %u TOL "LLU" (PckNum %d)\n", s->service_id, tsi, toi, nb_read-pos, start_offset, tol_size, routedmx->nb_packets));
-
-	e = gf_route_service_gather_object(routedmx, s, tsi, toi, start_offset, routedmx->buffer + pos, nb_read-pos, (u32) tol_size, B, in_order, rlct, &gather_object);
+	e = gf_route_service_gather_object(routedmx, s, tsi, toi, start_offset, routedmx->buffer + pos, nb_read-pos, (u32) transfert_length, B, in_order, rlct, &gather_object);
+	start_offset += (nb_read - pos) * ESI; 
 
 	if (e==GF_EOS) {
 		if (!tsi) {
