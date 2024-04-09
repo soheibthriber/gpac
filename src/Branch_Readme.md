@@ -14,8 +14,8 @@ Files to be changed : in_route.c , route_dmx.c :
 ### route.dmx:
    [Done] READ Packets and decode LCT HEADers, 
    [Done] READ EXT_FTD and EXT_FTI Headers. 
-   [TODO] manage Signaling  and subscribe to channels
-   [TODO] multiple channels case with different bitrates.  
-   [TODO] use of total length instead ot tol_size to reconstruct objects. 
-   [TODO] objects recunstruction 
+   [Done] ADD FDT table representation structs.  
+   [Done] use of ESI to reconcstruct objects.  
+   [Done] use of total length instead ot tol_size to reconstruct objects. 
+   [TODO] parsing FDT, and FDT instance creation
 ##  Sender 
