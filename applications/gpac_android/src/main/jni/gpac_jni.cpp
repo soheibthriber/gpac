@@ -164,139 +164,349 @@ int show_message(GPAC_JNI *gpac, const char* msg, const char* title, GF_Err stat
 	return 1;
 }
 
+// static GF_Err gpac_init_gui(GPAC_JNI *gpac)
+// {
+// 	GF_Filter *comp_filter=NULL;
+// 	const char *opt=NULL;
+// 	GF_Err e = GF_OK;
+
+// 	gf_sys_init(GF_MemTrackerNone, NULL);
+
+// 	if (!gf_opts_get_key("core", "threads"))
+// 		gf_opts_set_key("temp", "threads", "2");
+
+// 	opt = gf_opts_get_key("core", "log-file");
+// 	if (opt && strcmp(opt, "system") ) {
+// 		gpac->log_file = gf_fopen(opt, "wt");
+// 		if (!gpac->log_file) opt = "system";
+// 	}
+// 	if (opt) {
+// 		gf_log_set_tools_levels( gf_opts_get_key("core", "logs"), GF_TRUE );
+// 		gf_log_set_callback(gpac, gpac_jni_on_log);
+// 		gpac->do_log = 1;
+// 	}
+// 	gf_opts_set_key("temp", "display-cutout", gpac->has_display_cutout ? "yes" : "no");
+
+// 	opt = gf_opts_get_key("core", "startup-file");
+// 	GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("GUI path is %s\n", opt ? opt : "NOT SET!") );
+// 	gpac->no_gui = 0;
+// 	if (!opt || !gf_file_exists(opt)) {
+// 		gpac->no_gui = 1;
+// 		//if no GUI, redirect progress events
+// 		gf_set_progress_callback(gpac, on_progress_cbk);
+// 	}
+
+// 	//run in non blocking mode
+// 	gpac->fsess = gf_fs_new_defaults(GF_FS_FLAG_NON_BLOCKING);
+// 	if (!gpac->fsess) return GF_OUT_OF_MEM;
+
+// 	comp_filter = gf_fs_load_filter(gpac->fsess, "compositor:player=gui", &e);
+// 	if (!comp_filter) return e ? e : GF_OUT_OF_MEM;
+
+// 	gpac->compositor = (GF_Compositor *) gf_filter_get_udta(comp_filter);
+// 	if (!gpac->compositor) return GF_OUT_OF_MEM;
+
+// 	/*force fullscreen*/
+// 	gf_sc_set_option(gpac->compositor, GF_OPT_FULLSCREEN, 1);
+// 	gf_sc_set_size(gpac->compositor, gpac->last_width, gpac->last_height);
+// 	gf_fs_set_ui_callback(gpac->fsess, gpac_jni_event_proc, gpac);
+
+// 	//prevent destruction of JSRT until we unload gpac
+// 	gf_opts_set_key("temp", "static-jsrt", "true");
+
+// 	return GF_OK;
+// }
+
 static GF_Err gpac_init_gui(GPAC_JNI *gpac)
 {
-	GF_Filter *comp_filter=NULL;
-	const char *opt=NULL;
-	GF_Err e = GF_OK;
+    LOGE("sohaib l2: Entering gpac_init_gui");
+    GF_Filter *comp_filter = NULL;
+    const char *opt = NULL;
+    GF_Err e = GF_OK;
 
-	gf_sys_init(GF_MemTrackerNone, NULL);
+    LOGE("sohaib l2: Initializing GPAC system");
+    gf_sys_init(GF_MemTrackerNone, NULL);
 
-	if (!gf_opts_get_key("core", "threads"))
-		gf_opts_set_key("temp", "threads", "2");
+    if (!gf_opts_get_key("core", "threads")) {
+        LOGE("sohaib l2: Setting default threads option");
+        gf_opts_set_key("temp", "threads", "2");
+    }
 
-	opt = gf_opts_get_key("core", "log-file");
-	if (opt && strcmp(opt, "system") ) {
-		gpac->log_file = gf_fopen(opt, "wt");
-		if (!gpac->log_file) opt = "system";
-	}
-	if (opt) {
-		gf_log_set_tools_levels( gf_opts_get_key("core", "logs"), GF_TRUE );
-		gf_log_set_callback(gpac, gpac_jni_on_log);
-		gpac->do_log = 1;
-	}
-	gf_opts_set_key("temp", "display-cutout", gpac->has_display_cutout ? "yes" : "no");
+    LOGE("sohaib l2: Checking log file option");
+    opt = gf_opts_get_key("core", "log-file");
+    if (opt && strcmp(opt, "system")) {
+        LOGE("sohaib l2: Opening log file: %s", opt);
+        gpac->log_file = gf_fopen(opt, "wt");
+        if (!gpac->log_file) {
+            LOGE("sohaib l2: Failed to open log file, using system logs");
+            opt = "system";
+        }
+    }
+    if (opt) {
+        LOGE("sohaib l2: Setting log levels and callback");
+        gf_log_set_tools_levels(gf_opts_get_key("core", "logs"), GF_TRUE);
+        gf_log_set_callback(gpac, gpac_jni_on_log);
+        gpac->do_log = 1;
+    }
 
-	opt = gf_opts_get_key("core", "startup-file");
-	GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("GUI path is %s\n", opt ? opt : "NOT SET!") );
-	gpac->no_gui = 0;
-	if (!opt || !gf_file_exists(opt)) {
-		gpac->no_gui = 1;
-		//if no GUI, redirect progress events
-		gf_set_progress_callback(gpac, on_progress_cbk);
-	}
+    LOGE("sohaib l2: Setting display cutout option");
+    gf_opts_set_key("temp", "display-cutout", gpac->has_display_cutout ? "yes" : "no");
 
-	//run in non blocking mode
-	gpac->fsess = gf_fs_new_defaults(GF_FS_FLAG_NON_BLOCKING);
-	if (!gpac->fsess) return GF_OUT_OF_MEM;
+    LOGE("sohaib l2: Checking startup file option");
+    opt = gf_opts_get_key("core", "startup-file");
+    GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("sohaib l2: GUI path is %s\n", opt ? opt : "NOT SET!"));
+    gpac->no_gui = 0;
+    if (!opt || !gf_file_exists(opt)) {
+        LOGE("sohaib l2: No GUI detected, enabling progress callback");
+        gpac->no_gui = 1;
+        gf_set_progress_callback(gpac, on_progress_cbk);
+    }
 
-	comp_filter = gf_fs_load_filter(gpac->fsess, "compositor:player=gui", &e);
-	if (!comp_filter) return e ? e : GF_OUT_OF_MEM;
+    LOGE("sohaib l2: Creating file session in non-blocking mode");
+    gpac->fsess = gf_fs_new_defaults(GF_FS_FLAG_NON_BLOCKING);
+    if (!gpac->fsess) {
+        LOGE("sohaib l2: Failed to create file session, returning GF_OUT_OF_MEM");
+        return GF_OUT_OF_MEM;
+    }
 
-	gpac->compositor = (GF_Compositor *) gf_filter_get_udta(comp_filter);
-	if (!gpac->compositor) return GF_OUT_OF_MEM;
+    LOGE("sohaib l2: Loading compositor filter");
+    comp_filter = gf_fs_load_filter(gpac->fsess, "compositor:player=no:ogl=off", &e);
+    if (!comp_filter) {
+        LOGE("sohaib l2: Failed to load compositor filter, error code: %d", e ? e : GF_OUT_OF_MEM);
+        return e ? e : GF_OUT_OF_MEM;
+    }
 
-	/*force fullscreen*/
-	gf_sc_set_option(gpac->compositor, GF_OPT_FULLSCREEN, 1);
-	gf_sc_set_size(gpac->compositor, gpac->last_width, gpac->last_height);
-	gf_fs_set_ui_callback(gpac->fsess, gpac_jni_event_proc, gpac);
+    LOGE("sohaib l2: Getting compositor user data");
+    gpac->compositor = (GF_Compositor *)gf_filter_get_udta(comp_filter);
+    if (!gpac->compositor) {
+        LOGE("sohaib l2: Failed to get compositor user data, returning GF_OUT_OF_MEM");
+        return GF_OUT_OF_MEM;
+    }
 
-	//prevent destruction of JSRT until we unload gpac
-	gf_opts_set_key("temp", "static-jsrt", "true");
+    LOGE("sohaib l2: Configuring compositor options");
+    gf_sc_set_option(gpac->compositor, GF_OPT_FULLSCREEN, 1);
+    gf_sc_set_size(gpac->compositor, gpac->last_width, gpac->last_height);
+    gf_fs_set_ui_callback(gpac->fsess, gpac_jni_event_proc, gpac);
 
-	return GF_OK;
+    LOGE("sohaib l2: Enabling static JavaScript runtime");
+    gf_opts_set_key("temp", "static-jsrt", "true");
+
+    LOGE("sohaib l2: gpac_init_gui completed successfully");
+    return GF_OK;
 }
+
+
+// JNIEXPORT jlong JNICALL gpac_jni_init(JNIEnv * env, jclass obj, jobject gpac_class_obj, jint width, jint height, jboolean has_display_cutout, jstring _url_to_open, jstring _ext_storage, jstring _app_data_dir)
+// {
+// 	GF_Err e = GF_OK;
+// 	int success = 1;
+// 	jboolean isCopy;
+// 	const char *ext_storage = NULL, *app_data_dir=NULL, *url_to_open=NULL;
+
+// 	if (!javaVM) {
+// 		LOGE("NO JAVA VM FOUND !\n");
+// 		return (jlong) NULL;
+// 	}
+
+// 	if (_ext_storage)
+// 		ext_storage = env->GetStringUTFChars(_ext_storage, &isCopy);
+
+// 	if (_app_data_dir)
+// 		app_data_dir = env->GetStringUTFChars(_app_data_dir, &isCopy);
+
+// 	if (_url_to_open)
+// 		url_to_open = env->GetStringUTFChars(_url_to_open, &isCopy);
+
+
+// 	GPAC_JNI *gpac = (GPAC_JNI *) malloc(sizeof(GPAC_JNI));
+// 	if (!gpac) { success = 0; goto exit; }
+// 	memset(gpac, 0, sizeof(GPAC_JNI));
+
+// 	//keep a global ref to the java class instance
+// 	gpac->gpac_cbk_obj = env->NewGlobalRef(gpac_class_obj);
+
+// 	gpac->last_width = width;
+// 	gpac->last_height = height;
+// 	gpac->has_display_cutout = has_display_cutout ? GF_TRUE : GF_FALSE;
+// 	gf_sys_set_android_paths(app_data_dir, ext_storage);
+
+// 	e = gpac_init_gui(gpac);
+// 	if (e) { success = 0; goto exit; }
+
+// 	if (url_to_open) {
+// 		if (gpac->no_gui) {
+// 			GF_Event evt;
+// 			memset(&evt, 0, sizeof(GF_Event));
+// 			evt.type = GF_EVENT_NAVIGATE;
+// 			evt.navigate.to_url = url_to_open;
+// 			gf_sc_user_event(gpac->compositor, &evt);
+// 		} else {
+// 			gf_opts_set_key("temp", "gui_load_urls", url_to_open);
+// 		}
+// 	}
+
+// 	gpac->out_std[0] = 0;
+// 	if (ext_storage) {
+// 		strcpy(gpac->out_std, ext_storage);
+// 		strcat(gpac->out_std, "/GPAC/");
+// 		if (!gf_dir_exists(gpac->out_std)) {
+// 			gpac->out_std[0] = 0;
+// 		} else {
+// 			strcat(gpac->out_std, "/stderr_stdout.txt");
+// 		}
+// 	}
+
+// exit:
+
+// 	if (app_data_dir)
+// 		env->ReleaseStringUTFChars(_app_data_dir, app_data_dir);
+// 	if (ext_storage)
+// 		env->ReleaseStringUTFChars(_ext_storage, ext_storage);
+// 	if (url_to_open)
+// 		env->ReleaseStringUTFChars(_url_to_open, url_to_open);
+
+// 	if (!success) {
+// 		if (!e) e = GF_OUT_OF_MEM;
+// 		if (gpac) {
+// 			show_message(gpac, "Cannot load GPAC", "Fatal Error", e);
+// 			if (gpac->fsess) gf_fs_del(gpac->fsess);
+// 			free(gpac);
+// 			gpac = NULL;
+// 		}
+// 		LOGE("Cannot load GPAC filter session");
+// 	}
+// 	return (jlong) gpac;
+// }
 
 JNIEXPORT jlong JNICALL gpac_jni_init(JNIEnv * env, jclass obj, jobject gpac_class_obj, jint width, jint height, jboolean has_display_cutout, jstring _url_to_open, jstring _ext_storage, jstring _app_data_dir)
 {
-	GF_Err e = GF_OK;
-	int success = 1;
-	jboolean isCopy;
-	const char *ext_storage = NULL, *app_data_dir=NULL, *url_to_open=NULL;
+    GF_Err e = GF_OK;
+    int success = 1;
+    jboolean isCopy;
+    const char *ext_storage = NULL, *app_data_dir = NULL, *url_to_open = NULL;
 
-	if (!javaVM) {
-		LOGE("NO JAVA VM FOUND !\n");
-		return (jlong) NULL;
-	}
+    LOGE("sohaib: Entering gpac_jni_init");
 
-	if (_ext_storage)
-		ext_storage = env->GetStringUTFChars(_ext_storage, &isCopy);
+    if (!javaVM) {
+        LOGE("sohaib: NO JAVA VM FOUND !");
+        return (jlong) NULL;
+    }
 
-	if (_app_data_dir)
-		app_data_dir = env->GetStringUTFChars(_app_data_dir, &isCopy);
+    if (_ext_storage) {
+        LOGE("sohaib: Attempting to get ext_storage string");
+        ext_storage = env->GetStringUTFChars(_ext_storage, &isCopy);
+        if (!ext_storage) {
+            LOGE("sohaib: Failed to get ext_storage string");
+            success = 0;
+        }
+    }
 
-	if (_url_to_open)
-		url_to_open = env->GetStringUTFChars(_url_to_open, &isCopy);
+    if (_app_data_dir) {
+        LOGE("sohaib: Attempting to get app_data_dir string");
+        app_data_dir = env->GetStringUTFChars(_app_data_dir, &isCopy);
+        if (!app_data_dir) {
+            LOGE("sohaib: Failed to get app_data_dir string");
+            success = 0;
+        }
+    }
 
+    if (_url_to_open) {
+        LOGE("sohaib: Attempting to get url_to_open string");
+        url_to_open = env->GetStringUTFChars(_url_to_open, &isCopy);
+        if (!url_to_open) {
+            LOGE("sohaib: Failed to get url_to_open string");
+            success = 0;
+        }
+    }
 
-	GPAC_JNI *gpac = (GPAC_JNI *) malloc(sizeof(GPAC_JNI));
-	if (!gpac) { success = 0; goto exit; }
-	memset(gpac, 0, sizeof(GPAC_JNI));
+    LOGE("sohaib: Allocating memory for GPAC_JNI structure");
+    GPAC_JNI *gpac = (GPAC_JNI *) malloc(sizeof(GPAC_JNI));
+    if (!gpac) {
+        LOGE("sohaib: Failed to allocate memory for GPAC_JNI");
+        success = 0;
+        goto exit;
+    }
+    memset(gpac, 0, sizeof(GPAC_JNI));
 
-	//keep a global ref to the java class instance
-	gpac->gpac_cbk_obj = env->NewGlobalRef(gpac_class_obj);
+    LOGE("sohaib: Creating global reference for Java class object");
+    gpac->gpac_cbk_obj = env->NewGlobalRef(gpac_class_obj);
+    if (!gpac->gpac_cbk_obj) {
+        LOGE("sohaib: Failed to create global reference for Java class object");
+        success = 0;
+        goto exit;
+    }
 
-	gpac->last_width = width;
-	gpac->last_height = height;
-	gpac->has_display_cutout = has_display_cutout ? GF_TRUE : GF_FALSE;
-	gf_sys_set_android_paths(app_data_dir, ext_storage);
+    LOGE("sohaib: Setting GPAC properties");
+    gpac->last_width = width;
+    gpac->last_height = height;
+    gpac->has_display_cutout = has_display_cutout ? GF_TRUE : GF_FALSE;
+    gf_sys_set_android_paths(app_data_dir, ext_storage);
 
-	e = gpac_init_gui(gpac);
-	if (e) { success = 0; goto exit; }
+    LOGE("sohaib: Initializing GPAC GUI");
+    e = gpac_init_gui(gpac);
+    if (e) {
+        LOGE("sohaib: gpac_init_gui failed with error code %d", e);
+        success = 0;
+        goto exit;
+    }
 
-	if (url_to_open) {
-		if (gpac->no_gui) {
-			GF_Event evt;
-			memset(&evt, 0, sizeof(GF_Event));
-			evt.type = GF_EVENT_NAVIGATE;
-			evt.navigate.to_url = url_to_open;
-			gf_sc_user_event(gpac->compositor, &evt);
-		} else {
-			gf_opts_set_key("temp", "gui_load_urls", url_to_open);
-		}
-	}
+    if (url_to_open) {
+        LOGE("sohaib: Processing URL: %s", url_to_open);
+        if (gpac->no_gui) {
+            LOGE("sohaib: GPAC running without GUI, sending user event");
+            GF_Event evt;
+            memset(&evt, 0, sizeof(GF_Event));
+            evt.type = GF_EVENT_NAVIGATE;
+            evt.navigate.to_url = url_to_open;
+            gf_sc_user_event(gpac->compositor, &evt);
+        } else {
+            LOGE("sohaib: Setting GPAC option for URL loading");
+            gf_opts_set_key("temp", "gui_load_urls", url_to_open);
+        }
+    }
 
-	gpac->out_std[0] = 0;
-	if (ext_storage) {
-		strcpy(gpac->out_std, ext_storage);
-		strcat(gpac->out_std, "/GPAC/");
-		if (!gf_dir_exists(gpac->out_std)) {
-			gpac->out_std[0] = 0;
-		} else {
-			strcat(gpac->out_std, "/stderr_stdout.txt");
-		}
-	}
+    LOGE("sohaib: Setting output path");
+    gpac->out_std[0] = 0;
+    if (ext_storage) {
+        strcpy(gpac->out_std, ext_storage);
+        strcat(gpac->out_std, "/GPAC/");
+        if (!gf_dir_exists(gpac->out_std)) {
+            LOGE("sohaib: Output directory does not exist");
+            gpac->out_std[0] = 0;
+        } else {
+            strcat(gpac->out_std, "/stderr_stdout.txt");
+        }
+    }
 
 exit:
+    if (app_data_dir) {
+        LOGE("sohaib: Releasing app_data_dir string");
+        env->ReleaseStringUTFChars(_app_data_dir, app_data_dir);
+    }
+    if (ext_storage) {
+        LOGE("sohaib: Releasing ext_storage string");
+        env->ReleaseStringUTFChars(_ext_storage, ext_storage);
+    }
+    if (url_to_open) {
+        LOGE("sohaib: Releasing url_to_open string");
+        env->ReleaseStringUTFChars(_url_to_open, url_to_open);
+    }
 
-	if (app_data_dir)
-		env->ReleaseStringUTFChars(_app_data_dir, app_data_dir);
-	if (ext_storage)
-		env->ReleaseStringUTFChars(_ext_storage, ext_storage);
-	if (url_to_open)
-		env->ReleaseStringUTFChars(_url_to_open, url_to_open);
+    if (!success) {
+        if (!e) e = GF_OUT_OF_MEM;
+        if (gpac) {
+            LOGE("sohaib: Showing error message to user");
+            show_message(gpac, "Cannot load GPAC", "Fatal Error", e);
+            if (gpac->fsess) gf_fs_del(gpac->fsess);
+            free(gpac);
+            gpac = NULL;
+        }
+        LOGE("sohaib: GPAC initialization failed");
+    } else {
+        LOGE("sohaib: GPAC initialized successfully");
+    }
 
-	if (!success) {
-		if (!e) e = GF_OUT_OF_MEM;
-		if (gpac) {
-			show_message(gpac, "Cannot load GPAC", "Fatal Error", e);
-			if (gpac->fsess) gf_fs_del(gpac->fsess);
-			free(gpac);
-			gpac = NULL;
-		}
-		LOGE("Cannot load GPAC filter session");
-	}
-	return (jlong) gpac;
+    return (jlong) gpac;
 }
 
 static void gpac_uninit(GPAC_JNI *gpac)
