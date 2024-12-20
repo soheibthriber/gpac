@@ -119,6 +119,7 @@ import android.widget.TextView;
 import android.text.method.ScrollingMovementMethod;
 import android.view.Gravity;
 
+import android.provider.Settings;
 
 
 /**
@@ -229,8 +230,11 @@ public class GPAC extends Activity {
             throw new RuntimeException("Cannot find package " + context.getPackageName(), e); //$NON-NLS-1$
         }
 
-        external_storage_dir = Environment.getExternalStorageDirectory().getAbsolutePath();
-        gpac_install_logs = external_storage_dir + "/gpac_android_launch_logs.txt";
+        //external_storage_dir = Environment.getExternalStorageDirectory().getAbsolutePath();
+        //gpac_install_logs = external_storage_dir + "/gpac_android_launch_logs.txt";
+
+        File externalStorageDir = getExternalFilesDir(null);
+        gpac_install_logs = new File(externalStorageDir, "gpac_android_launch_logs.txt").getAbsolutePath();
 
 		//extract assets
 		checkAssetsCopy();
@@ -239,12 +243,28 @@ public class GPAC extends Activity {
         setContentView(R.layout.main);
 
 
-		if (Build.VERSION.SDK_INT >= 23) {
-		    String[] PERMISSIONS = {android.Manifest.permission.WRITE_EXTERNAL_STORAGE};
-		    if (!hasPermissions(context, PERMISSIONS)) {
-		        ActivityCompat.requestPermissions(this, PERMISSIONS, WRITE_PERM_REQUEST );
-		    }
-		}
+// 		if (Build.VERSION.SDK_INT >= 23) {
+// 		    String[] PERMISSIONS = {android.Manifest.permission.WRITE_EXTERNAL_STORAGE};
+// 		    if (!hasPermissions(context, PERMISSIONS)) {
+// 		        ActivityCompat.requestPermissions(this, PERMISSIONS, WRITE_PERM_REQUEST );
+// 		    }
+// 		}
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        if (!Environment.isExternalStorageManager()) {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+            intent.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+        }
+    } else {
+        String[] permissions = {Manifest.permission.READ_EXTERNAL_STORAGE};
+        if (!hasPermissions(context, permissions)) {
+            ActivityCompat.requestPermissions(this, permissions, WRITE_PERM_REQUEST);
+        }
+    }
+}
+
 
 		final View contentView = (LinearLayout)findViewById(R.id.surface_gl);
 		View decor_view = getWindow().getDecorView();
@@ -348,6 +368,7 @@ public class GPAC extends Activity {
 	    }
 	    return true;
 	}
+
 
 	@Override
 	public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
@@ -694,29 +715,55 @@ public class GPAC extends Activity {
 		}
     }
 
-	private void openURLasync(final String url) {
-		if (url==null) return;
+	// private void openURLasync(final String url) {
+	// 	if (url==null) return;
 
-		if (url.startsWith("gpac ") || url.startsWith("MP4Box ")) {
-			if (is_gui_mode) {
-				is_gui_mode = false;
-				replaceView(gpac_gl_view, gpac_log_view);
-			}
-			gpac_log_view.setText(null);
-			gpac_log_view.append("Executing \"" + url + "\"\n\n");
-		} else {
-			if (!is_gui_mode) {
-				//switching log view to GLSurfaceView must be done on UI thread otherwsie we crash
+	// 	if (url.startsWith("gpac ") || url.startsWith("MP4Box ")) {
+	// 		if (is_gui_mode) {
+	// 			is_gui_mode = false;
+	// 			replaceView(gpac_gl_view, gpac_log_view);
+	// 		}
+	// 		gpac_log_view.setText(null);
+	// 		gpac_log_view.append("Executing \"" + url + "\"\n\n");
+	// 	} else {
+	// 		if (!is_gui_mode) {
+	// 			//switching log view to GLSurfaceView must be done on UI thread otherwsie we crash
+    //             runOnUiThread(new Runnable() {
+    //                 @Override
+    //                 public void run() {
+	// 					is_gui_mode = true;
+	// 					gpac_render_thread = null;
+	// 					replaceView(gpac_log_view, gpac_gl_view);
+    //                 }
+    //             });
+	// 		}
+	// 	}
+
+    private void openURLasync(final String url) {
+        if (url == null) return;
+
+        if (url.startsWith("gpac ") || url.startsWith("MP4Box ")) {
+            if (is_gui_mode) {
+            is_gui_mode = false;
+            replaceView(gpac_gl_view, gpac_log_view);
+            }
+        gpac_log_view.setText(null);
+        gpac_log_view.append("Executing \"" + url + "\"\n\n");
+        } else {
+            if (!is_gui_mode) {
+                // Switching log view to GLSurfaceView must be done on the UI thread, otherwise we crash
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-						is_gui_mode = true;
-						gpac_render_thread = null;
-						replaceView(gpac_log_view, gpac_gl_view);
+                    is_gui_mode = true;
+                    // Do not reset gpac_render_thread to null
+                    replaceView(gpac_log_view, gpac_gl_view);
                     }
                 });
-			}
-		}
+            }
+        }
+    //     }
+
 
         service.execute(new Runnable() {
 
@@ -979,11 +1026,17 @@ public class GPAC extends Activity {
         if (load_errors != null)
             return;
         StringBuilder sb = new StringBuilder();
+        // final String[] toLoad = { "GLESv2", "log",
+        //                          "jpegdroid", "javaenv",
+        //                          "mad", "ft2", "faad",
+        //                          "openjpeg", "png", "z",
+        //                          "avutil", "swscale", "swresample", "avcodec", "avformat", "avfilter", "avdevice",
+        //                          "gpacWrapper", "gpac"};
+
         final String[] toLoad = { "GLESv2", "log",
                                  "jpegdroid", "javaenv",
-                                 "mad", "ft2", "faad",
+                                 "ft2",
                                  "openjpeg", "png", "z",
-                                 "avutil", "swscale", "swresample", "avcodec", "avformat", "avfilter", "avdevice",
                                  "gpacWrapper", "gpac"};
         HashMap<String, Throwable> exceptions = new HashMap<String, Throwable>();
         for (String s : toLoad) {
@@ -1065,11 +1118,11 @@ public class GPAC extends Activity {
 		    }
             gpac_jni_handle = init(this, width, height, has_display_cutout, init_url, external_storage_dir, gpac_data_dir );
 			if (gpac_jni_handle == 0) {
-				throw new Exception("Error while creating instance, no handle created!\n" + sb.toString()); //$NON-NLS-1$
+				throw new Exception("sohaib Error while creating instance, no handle created!\n" + sb.toString()); //$NON-NLS-1$
 			}
         } catch (Throwable e) {
 			onGPACError(e);
-            throw new Exception("Error while creating instance\n" + sb.toString()); //$NON-NLS-1$
+            throw new Exception("sohaib Error while creating instance\n" + sb.toString()); //$NON-NLS-1$
         }
         gpac_render_thread = Thread.currentThread();
 
@@ -1265,7 +1318,9 @@ public class GPAC extends Activity {
 	}
 
     private boolean checkCurrentThread() throws RuntimeException {
-		if (!is_gui_mode) return false;
+        Log.d("GPAC", "sohaib gpac_render_thread: " + gpac_render_thread);
+        Log.d("GPAC", "sohaib Current thread: " + Thread.currentThread());
+		//if (!is_gui_mode) return false;
         if (Thread.currentThread() != gpac_render_thread)
             throw new RuntimeException("Method called outside allowed Thread scope !"); //$NON-NLS-1$
 		return true;
