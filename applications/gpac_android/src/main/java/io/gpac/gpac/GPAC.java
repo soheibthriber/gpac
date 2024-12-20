@@ -85,7 +85,9 @@ import android.widget.Toast;
 import android.content.res.AssetManager;
 import android.os.Environment;
 import android.Manifest;
-import android.support.v4.app.ActivityCompat;
+//import android.support.v4.app.ActivityCompat;
+import androidx.core.app.ActivityCompat;
+//import androidx.core.content.ContextCompat;
 import android.os.Build;
 import android.content.pm.PackageManager;
 
@@ -215,7 +217,7 @@ public class GPAC extends Activity {
 		}
 
 		//locate data dirs and external storage
-		Context context = getApplicationContext();
+		Context context = this;
         try {
             if (context == null || context.getPackageManager() == null) {
                 gpac_data_dir = Environment.getDataDirectory() + "/data/io.gpac.gpac";
@@ -240,7 +242,7 @@ public class GPAC extends Activity {
 		if (Build.VERSION.SDK_INT >= 23) {
 		    String[] PERMISSIONS = {android.Manifest.permission.WRITE_EXTERNAL_STORAGE};
 		    if (!hasPermissions(context, PERMISSIONS)) {
-		        ActivityCompat.requestPermissions((Activity) context, PERMISSIONS, WRITE_PERM_REQUEST );
+		        ActivityCompat.requestPermissions(this, PERMISSIONS, WRITE_PERM_REQUEST );
 		    }
 		}
 

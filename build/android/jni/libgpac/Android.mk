@@ -6,6 +6,9 @@ include $(LOCAL_PATH)/../common.mk
 LOCAL_MODULE		:= gpac
 LOCAL_C_INCLUDES 	:= $(LOCAL_PATH)
 
+NDK_SYSROOT := /opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+GLES_LIB := $(NDK_SYSROOT)/usr/lib/aarch64-linux-android/34/libGLESv2.so
+
 LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../include
 LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../extra_lib
 LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../extra_lib/include
@@ -19,17 +22,17 @@ LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../extra_lib/include/openssl_android
 LOCAL_C_INCLUDES 	+= $(LOCAL_PATH)/../../../../modules
 
 LOCAL_LDLIBS    += -L$(LOCAL_PATH)/../../../../extra_lib/lib/android/$(TARGET_ARCH_ABI)
-LOCAL_LDLIBS    += -lGLESv2 -ldl
-LOCAL_LDLIBS    += -lft2 -ljpegdroid -lopenjpeg -lpng -lfaad -lmad -lnghttp2 -lz -lssl -lcrypto -lcaption
+LOCAL_LDLIBS    += -L$(LOCAL_PATH)/../../../../extra_lib/lib/android/arm64-v8a
+LOCAL_LDLIBS    += -lnghttp2  -lssl -lcrypto -lz -lpng  -lft2 -ljpegdroid -lopenjpeg 
+LDFLAGS += $(GLES_LIB)
+LOCAL_LDLIBS    +=  $(GLES_LIB)
 
-#ffmpeg
-LOCAL_LDLIBS    += -lavcodec -lavformat -lswresample -lavfilter -lavutil -lavdevice -lswscale
+
 
 #mediacodec
 LOCAL_LDLIBS    += -llog -lOpenMAXAL -lmediandk -landroid
 
 #mpegh
-LOCAL_LDLIBS    += -lMpeghDec -lMpegTPDec -lPCMutils -lIGFdec -lArithCoding -lFormatConverter -lgVBAPRenderer -lDRCdec -lUIManager -lSYS -lFDK -lm
 
 LOCAL_CFLAGS +=	-DGPAC_HAVE_CONFIG_H
 LOCAL_CFLAGS += -DNO_MALLINFO

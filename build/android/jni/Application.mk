@@ -1,4 +1,4 @@
-APP_ABI := x86 armeabi-v7a
+APP_ABI := arm64-v8a
 APP_STL := c++_static
 APP_CPPFLAGS := -frtti -fexceptions -Wno-parentheses -Wno-shift-negative-value -Wno-pointer-sign -Wno-implicit-const-int-float-conversion
 APP_CFLAGS := -Wno-parentheses -Wno-shift-negative-value -Wno-pointer-sign -Wno-implicit-const-int-float-conversion
