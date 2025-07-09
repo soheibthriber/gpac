@@ -225,6 +225,8 @@ typedef enum
 	GF_PIXEL_NV12		=	GF_4CC('N','V','1','2'),
 	/*!420 Y planar VU interleaved (U and V swapped), 10 bits, little endian */
 	GF_PIXEL_NV12_10	=	GF_4CC('N','1','2','0'),
+	/*!PIXEL_VAAPI format */
+	GF_PIXEL_VAAPI		=	GF_4CC('V','A','A','P'),
 	/*!422 YUV*/
 	GF_PIXEL_YUV422		=	GF_4CC('Y','4','4','2'),
 	/*!422 YUV, 10 bits, little endian*/

@@ -29,6 +29,10 @@
 
 #include "ff_common.h"
 
+#include <libavutil/hwcontext.h>  // For hardware acceleration context
+#include <libavutil/buffer.h>     // For AVBufferRef handling
+#include <libavutil/error.h>
+
 #if (LIBAVCODEC_VERSION_MAJOR < 58)
 #define FFMPEG_NO_SUBS
 #endif
@@ -113,7 +117,80 @@ typedef struct _gf_ffdec_ctx
 	Bool prev_sub_valid, warned_txt;
 	GF_IRect irc;
 	GF_FilterFrameInterface sub_ifce;
+
+	// HW ACCELS
+	char *hwaccel;
+	char *hwdevice;
+	Bool hw_accel_enabled;
+	AVBufferRef *hw_device_ctx;
+	enum AVPixelFormat hw_pix_fmt;
+	enum AVHWDeviceType hw_device_type;
+	char hw_device_path[256];
+
 } GF_FFDecodeCtx;
+
+static enum AVPixelFormat ff_get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts)
+{
+    GF_FFDecodeCtx *ffd = (GF_FFDecodeCtx *)ctx->opaque;
+    const enum AVPixelFormat *p;
+    for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
+        if (*p == ffd->hw_pix_fmt)
+            return *p;
+    }
+	
+	GF_LOG(GF_LOG_WARNING, GF_LOG_CODEC, ("[FFDec] Failed to get HW surface format.\n"));
+    return AV_PIX_FMT_NONE;
+}
+
+
+static Bool ffdec_init_hw_accel(GF_FFDecodeCtx *ffd, const char *hwaccel_type)
+{
+    enum AVHWDeviceType type = av_hwdevice_find_type_by_name(hwaccel_type);
+    if (type == AV_HWDEVICE_TYPE_NONE) {
+        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Hardware device type %s is not supported.\n", hwaccel_type));
+        return GF_FALSE;
+    }
+
+	// Set device path from argument or default
+    if ((ffd->hwdevice && ffd->hwdevice[0])) {
+        strncpy(ffd->hw_device_path, ffd->hwdevice, sizeof(ffd->hw_device_path)-1);
+        ffd->hw_device_path[sizeof(ffd->hw_device_path)-1] = 0;
+    } else if (type == AV_HWDEVICE_TYPE_VAAPI) {
+        strncpy(ffd->hw_device_path, "/dev/dri/renderD128", sizeof(ffd->hw_device_path)-1);
+        ffd->hw_device_path[sizeof(ffd->hw_device_path)-1] = 0;
+    } else {
+        ffd->hw_device_path[0] = 0;
+    }
+
+    GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFDec] Using hardware device: %s\n", ffd->hw_device_path[0] ? ffd->hw_device_path : "(none)"));
+
+    // Clean up existing device context if any exist
+    if (ffd->hw_device_ctx) {
+        av_buffer_unref(&ffd->hw_device_ctx);
+        ffd->hw_device_ctx = NULL;
+    }
+    
+    // Create hardware device context
+    AVBufferRef *hw_device_ctx = NULL;
+    int err = av_hwdevice_ctx_create(&hw_device_ctx, type, 
+                                    ffd->hw_device_path, NULL, 0);
+    
+    if (err < 0) {
+        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to create hardware device: %s\n", 
+            av_err2str(err)));
+        return GF_FALSE;
+    }
+    
+    // Store device type and context
+    ffd->hw_device_type = type;
+    ffd->hw_device_ctx = hw_device_ctx;
+    
+    GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFDec] Hardware acceleration enabled: %s on device %s\n", 
+        hwaccel_type, ffd->hw_device_path));
+    
+    ffd->hw_accel_enabled = GF_TRUE;
+    return GF_TRUE;
+}
 
 static GF_Err ffdec_initialize(GF_Filter *filter)
 {
@@ -149,6 +226,12 @@ static void ffdec_finalize(GF_Filter *filter)
 	if (ctx->options) av_dict_free(&ctx->options);
 	if (ctx->frame) av_frame_free(&ctx->frame);
 	if (ctx->sws_ctx) sws_freeContext(ctx->sws_ctx);
+
+	// Add hardware cleanup
+    if (ctx->hw_device_ctx) {
+        av_buffer_unref(&ctx->hw_device_ctx);
+        ctx->hw_device_ctx = NULL;
+    }
 
 	while (gf_list_count(ctx->src_packets)) {
 		GF_FilterPacket *pck = gf_list_pop_back(ctx->src_packets);
@@ -332,6 +415,80 @@ restart:
 		break;
 	}
 #endif
+
+	if (gotpic && ctx->hw_accel_enabled && frame->format == ctx->hw_pix_fmt) {
+    GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Transferring hardware frame (format=%s) to system memory\n", 
+        av_get_pix_fmt_name(frame->format)));
+    
+    // Allocate a frame for the CPU copy
+    AVFrame *sw_frame = av_frame_alloc();
+    if (!sw_frame) {
+        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to allocate SW frame\n"));
+        return GF_OUT_OF_MEM;
+    }
+
+	// Copy ALL properties from hardware frame
+    av_frame_copy_props(sw_frame, frame);
+    
+    
+    // Set necessary dimensions for the software frame
+    sw_frame->width = frame->width;
+    sw_frame->height = frame->height;
+    sw_frame->format = AV_PIX_FMT_YUV420P;
+
+     // Use the hardware frame's linesize if available
+    if (frame->linesize[0] > 0) {
+        sw_frame->linesize[0] = frame->linesize[0];
+        sw_frame->linesize[1] = frame->linesize[1];
+    }
+    
+  	// Allocate buffers for the software frame
+    int ret = av_frame_get_buffer(sw_frame, 16);
+    if (ret < 0) {
+        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to allocate SW frame buffers: %s (w=%d,h=%d,fmt=%d)\n", 
+            av_err2str(ret), sw_frame->width, sw_frame->height, sw_frame->format));
+        av_frame_free(&sw_frame);
+        return GF_IO_ERR;
+    }
+    
+    // Make the frame writable
+    ret = av_frame_make_writable(sw_frame);
+    if (ret < 0) {
+        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to make SW frame writable: %s\n", 
+            av_err2str(ret)));
+        av_frame_free(&sw_frame);
+        return GF_IO_ERR;
+    }
+    
+    // Transfer hardware frame to system memory
+    ret = av_hwframe_transfer_data(sw_frame, frame, 0);
+    if (ret < 0) {
+        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to transfer HW frame: %s\n", 
+            av_err2str(ret)));
+        av_frame_free(&sw_frame);
+        return GF_IO_ERR;
+    }
+    
+    // Use the CPU copy 
+    av_frame_copy_props(sw_frame, frame);
+    av_frame_unref(frame);
+    av_frame_move_ref(frame, sw_frame);
+    av_frame_free(&sw_frame);
+
+	// Update decoder pix_fmt to match the transferred frame
+	ctx->decoder->pix_fmt = frame->format;
+	// update the cached format to prevent incorrect format detection later
+	ctx->o_ff_pfmt = frame->format;
+
+	// Force swscaler recreation
+	if (ctx->sws_ctx) {
+    	sws_freeContext(ctx->sws_ctx);
+    	ctx->sws_ctx = NULL;
+	}
+    
+    GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Hardware frame transferred - new format: %s\n", 
+        av_get_pix_fmt_name(frame->format)));
+	}
 
 
 	if (pck) gf_filter_pid_drop_packet(ctx->in_pid);
@@ -1260,6 +1417,33 @@ static GF_Err ffdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 	av_dict_copy(&options, ctx->options, 0);
 	ffmpeg_check_threads(filter, options, ctx->decoder);
 
+	const char *hwaccel = ctx->hwaccel;
+	if (hwaccel && strlen(hwaccel)&& ctx->type == GF_STREAM_VISUAL) {
+		GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFDec] Attempting hardware acceleration with %s\n", hwaccel));
+		if (ffdec_init_hw_accel(ctx, hwaccel)) {
+			// Find suitable hardware pixel format
+			for (int i = 0;; i++) {
+				const AVCodecHWConfig *config = avcodec_get_hw_config(codec, i);
+				if (!config) {
+					GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Decoder %s does not support device type %s.\n", 
+						codec->name, "vaapi"));
+					av_buffer_unref(&ctx->hw_device_ctx);
+					ctx->hw_accel_enabled = GF_FALSE;
+					break;
+				}
+				if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX && 
+					config->device_type == ctx->hw_device_type) {
+					ctx->hw_pix_fmt = config->pix_fmt;
+					// Create a reference to the hardware device context for the decoder
+					ctx->decoder->hw_device_ctx = av_buffer_ref(ctx->hw_device_ctx);
+					ctx->decoder->opaque = ctx;
+					ctx->decoder->get_format = ff_get_hw_format;
+					break;
+				}
+			}
+		}
+	}
+
 	res = avcodec_open2(ctx->decoder, codec, &options);
 	if (res < 0) {
 		if (options) av_dict_free(&options);
@@ -1542,6 +1726,8 @@ static const GF_FilterArgs FFDecodeArgs[] =
 {
 	{ OFFS(ffcmap), "codec map", GF_PROP_STRING_LIST, NULL, NULL, 0},
 	{ OFFS(c), "codec name (GPAC or ffmpeg), only used to query possible arguments - updated to ffmpeg codec name after initialization", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_EXPERT},
+	{ OFFS(hwaccel), "hardware acceleration type (vaapi, cuda, etc.)", GF_PROP_STRING, NULL, NULL, 0},
+    { OFFS(hwdevice), "hardware device path", GF_PROP_STRING, NULL, NULL, 0},
 	{ "*", -1, "any possible options defined for AVCodecContext and sub-classes. See `gpac -hx ffdec` and `gpac -hx ffdec:*`", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_META},
 	{0}
 };
