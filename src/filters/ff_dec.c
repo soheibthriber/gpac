@@ -1726,7 +1726,7 @@ static const GF_FilterArgs FFDecodeArgs[] =
 {
 	{ OFFS(ffcmap), "codec map", GF_PROP_STRING_LIST, NULL, NULL, 0},
 	{ OFFS(c), "codec name (GPAC or ffmpeg), only used to query possible arguments - updated to ffmpeg codec name after initialization", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_EXPERT},
-	{ OFFS(hwaccel), "hardware acceleration type (vaapi, cuda, etc.)", GF_PROP_STRING, NULL, NULL, 0},
+	{ OFFS(hwaccel), "hardware acceleration type (vaapi, videotoolbox, etc.)", GF_PROP_STRING, NULL, NULL, 0},
     { OFFS(hwdevice), "hardware device path", GF_PROP_STRING, NULL, NULL, 0},
 	{ "*", -1, "any possible options defined for AVCodecContext and sub-classes. See `gpac -hx ffdec` and `gpac -hx ffdec:*`", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_META},
 	{0}
