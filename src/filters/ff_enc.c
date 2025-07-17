@@ -158,12 +158,12 @@ typedef struct _gf_ffenc_ctx
 
 	// hw acceleration
 	char *hwaccel;
-    char *hwdevice;
+	char *hwdevice;
 	Bool hw_accel_enabled;
-    AVBufferRef *hw_device_ctx;
-    enum AVPixelFormat hw_pix_fmt;
-    enum AVHWDeviceType hw_device_type;
-    char hw_device_path[256];
+	AVBufferRef *hw_device_ctx;
+	enum AVPixelFormat hw_pix_fmt;
+	enum AVHWDeviceType hw_device_type;
+	char hw_device_path[256];
 } GF_FFEncodeCtx;
 
 static GF_Err ffenc_configure_pid_ex(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove, Bool is_force_reconf);
@@ -199,46 +199,46 @@ static Bool ffenc_init_hw_accel(GF_FFEncodeCtx *ctx, const char *hwaccel_type)
 	GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Attempting hardware acceleration with %s\n", hwaccel_type));
 	GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Using hardware device: %s\n", ctx->hw_device_path[0] ? ctx->hw_device_path : "(none)"));
 	GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Hardware acceleration enabled: %s on device %s\n", hwaccel_type, ctx->hw_device_path));
-    enum AVHWDeviceType type = av_hwdevice_find_type_by_name(hwaccel_type);
-    if (type == AV_HWDEVICE_TYPE_NONE) {
-        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFEnc] Hardware device type %s is not supported.\n", hwaccel_type));
-        ctx->hw_accel_enabled = GF_FALSE;
-        return GF_FALSE;
-    }
+	enum AVHWDeviceType type = av_hwdevice_find_type_by_name(hwaccel_type);
+	if (type == AV_HWDEVICE_TYPE_NONE) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFEnc] Hardware device type %s is not supported.\n", hwaccel_type));
+		ctx->hw_accel_enabled = GF_FALSE;
+		return GF_FALSE;
+	}
 
-    // Set device path from argument or default
-    if (ctx->hwdevice && ctx->hwdevice[0]) {
-        strncpy(ctx->hw_device_path, ctx->hwdevice, sizeof(ctx->hw_device_path)-1);
-        ctx->hw_device_path[sizeof(ctx->hw_device_path)-1] = 0;
-    } else if (type == AV_HWDEVICE_TYPE_VAAPI) {
-        strncpy(ctx->hw_device_path, "/dev/dri/renderD128", sizeof(ctx->hw_device_path)-1);
-        ctx->hw_device_path[sizeof(ctx->hw_device_path)-1] = 0;
-    } else {
-        ctx->hw_device_path[0] = 0;
-    }
+	// Set device path from argument or default
+	if (ctx->hwdevice && ctx->hwdevice[0]) {
+		strncpy(ctx->hw_device_path, ctx->hwdevice, sizeof(ctx->hw_device_path)-1);
+		ctx->hw_device_path[sizeof(ctx->hw_device_path)-1] = 0;
+	} else if (type == AV_HWDEVICE_TYPE_VAAPI) {
+		strncpy(ctx->hw_device_path, "/dev/dri/renderD128", sizeof(ctx->hw_device_path)-1);
+		ctx->hw_device_path[sizeof(ctx->hw_device_path)-1] = 0;
+	} else {
+		ctx->hw_device_path[0] = 0;
+	}
 
-    GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Using hardware device: %s\n", ctx->hw_device_path[0] ? ctx->hw_device_path : "(none)"));
+	GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Using hardware device: %s\n", ctx->hw_device_path[0] ? ctx->hw_device_path : "(none)"));
 
-    // Clean up existing device context if any exist
-    if (ctx->hw_device_ctx) {
-        av_buffer_unref(&ctx->hw_device_ctx);
-        ctx->hw_device_ctx = NULL;
-    }
+	// Clean up existing device context if any exist
+	if (ctx->hw_device_ctx) {
+		av_buffer_unref(&ctx->hw_device_ctx);
+		ctx->hw_device_ctx = NULL;
+	}
 
-    // Create hardware device context
-    AVBufferRef *hw_device_ctx = NULL;
-    int err = av_hwdevice_ctx_create(&hw_device_ctx, type, ctx->hw_device_path, NULL, 0);
-    if (err < 0) {
-        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFEnc] Failed to create hardware device: %s\n", av_err2str(err)));
-        ctx->hw_accel_enabled = GF_FALSE;
-        return GF_FALSE;
-    }
+	// Create hardware device context
+	AVBufferRef *hw_device_ctx = NULL;
+	int err = av_hwdevice_ctx_create(&hw_device_ctx, type, ctx->hw_device_path, NULL, 0);
+	if (err < 0) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFEnc] Failed to create hardware device: %s\n", av_err2str(err)));
+		ctx->hw_accel_enabled = GF_FALSE;
+		return GF_FALSE;
+	}
 
-    ctx->hw_device_type = type;
-    ctx->hw_device_ctx = hw_device_ctx;
-    ctx->hw_pix_fmt = GF_PIXEL_HW_VAAPI;
-    ctx->hw_accel_enabled = GF_TRUE;
-    return GF_TRUE;
+	ctx->hw_device_type = type;
+	ctx->hw_device_ctx = hw_device_ctx;
+	ctx->hw_pix_fmt = GF_PIXEL_HW_VAAPI;
+	ctx->hw_accel_enabled = GF_TRUE;
+	return GF_TRUE;
 }
 static GF_Err ffenc_initialize(GF_Filter *filter)
 {
@@ -253,8 +253,8 @@ static GF_Err ffenc_initialize(GF_Filter *filter)
 	ctx->pkt = av_packet_alloc();
 #endif
 	if (1) {
-    ctx->c = gf_strdup("h264_vaapi");
-    GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Forcing VAAPI encoder: %s due to hwaccel argument\n", ctx->c));
+		ctx->c = gf_strdup("h264_vaapi");
+		GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Forcing VAAPI encoder: %s due to hwaccel argument\n", ctx->c));
 	}
 
 	if (!ctx->c) return GF_OK;
