@@ -119,13 +119,13 @@ typedef struct _gf_ffdec_ctx
 	GF_FilterFrameInterface sub_ifce;
 
 	//hardware acceleration
-	char *hwaccel;
-	char *hwdevice;
+	char *hwaccel;  //FIXME: redundant with hw_device_type?
+	char *hwdevice; //FIXME: redundant with hw_device_type?
 	Bool hw_accel_enabled; // FIXME: can't it be inferred from hwaccel being non NULL ?
 	AVBufferRef *hw_device_ctx;
 	enum AVPixelFormat hw_pix_fmt;
 	enum AVHWDeviceType hw_device_type;
-	char hw_device_path[MAX_PATH];
+	char hw_device_path[GF_MAX_PATH];
 	Bool gpuonly; // If true, output VAAPI frames directly (no CPU transfer)
 } GF_FFDecodeCtx;
 
@@ -426,7 +426,7 @@ restart:
 			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_WIDTH, &PROP_UINT(frame->width));
 			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_HEIGHT, &PROP_UINT(frame->height));
 		} else {
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Transferring hardware frame (format=%s) to system memory\n", 
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Transferring hardware frame (format=%s) to system memory\n", 
 			av_get_pix_fmt_name(frame->format)));
 		
 		// Allocate a frame for the CPU copy
@@ -1436,7 +1436,7 @@ static GF_Err ffdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 				const AVCodecHWConfig *config = avcodec_get_hw_config(codec, i);
 				if (!config) {
 					GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Decoder %s does not support device type %s.\n", 
-						codec->name, "vaapi"));
+						codec->name, ctx->hw_device_type == AV_HWDEVICE_TYPE_NONE ? "none" : av_hwdevice_get_type_name(ctx->hw_device_type)));
 					av_buffer_unref(&ctx->hw_device_ctx);
 					ctx->hw_accel_enabled = GF_FALSE;
 					break;
