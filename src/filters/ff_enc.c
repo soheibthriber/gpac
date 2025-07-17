@@ -252,7 +252,7 @@ static GF_Err ffenc_initialize(GF_Filter *filter)
 #if (LIBAVCODEC_VERSION_MAJOR >= 59)
 	ctx->pkt = av_packet_alloc();
 #endif
-	if (1) {
+	if (!ctx->c) { //FIXME
 		ctx->c = gf_strdup("h264_vaapi");
 		GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Forcing VAAPI encoder: %s due to hwaccel argument\n", ctx->c));
 	}
@@ -659,8 +659,8 @@ static GF_Err ffenc_process_video(GF_Filter *filter, struct _gf_ffenc_ctx *ctx)
 			if (ctx->nb_planes>1) {
 				ctx->frame->data[1] = (u8 *) data + ctx->stride * ctx->height;
 				ctx->frame->linesize[1] = ctx->stride_uv ? ctx->stride_uv : ctx->stride/2;
-				if (ctx->nb_planes>2) {		// If not VAAPI, drop packet and return (ignore CPU transfer)
-
+				if (ctx->nb_planes>2) {
+					// If not VAAPI, drop packet and return (ignore CPU transfer)
 					ctx->frame->data[2] = (u8 *) ctx->frame->data[1] + ctx->stride_uv * ctx->height/2;
 					ctx->frame->linesize[2] = ctx->frame->linesize[1];
 				} else {

@@ -420,8 +420,8 @@ restart:
 
 	if (gotpic && ctx->hw_accel_enabled && frame->format == ctx->hw_pix_fmt) {
 		if (ctx->gpuonly) {
-			// Zero-copy: output VAAPI frame directly
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Outputting VAAPI frame directly (zero-copy)\n"));
+			// Zero-copy: output hw frame directly
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Outputting hardware frame directly (zero-copy)\n"));
 			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_PIXFMT, &PROP_UINT(GF_PIXEL_HW_VAAPI));
 			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_WIDTH, &PROP_UINT(frame->width));
 			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_HEIGHT, &PROP_UINT(frame->height));
