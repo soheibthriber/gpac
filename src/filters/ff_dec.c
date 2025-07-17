@@ -126,7 +126,7 @@ typedef struct _gf_ffdec_ctx
 	enum AVPixelFormat hw_pix_fmt;
 	enum AVHWDeviceType hw_device_type;
 	char hw_device_path[256];
-
+	Bool gpuonly; // If true, output VAAPI frames directly (no CPU transfer)
 } GF_FFDecodeCtx;
 
 static enum AVPixelFormat ff_get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts)
@@ -417,77 +417,85 @@ restart:
 #endif
 
 	if (gotpic && ctx->hw_accel_enabled && frame->format == ctx->hw_pix_fmt) {
-    GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Transferring hardware frame (format=%s) to system memory\n", 
-        av_get_pix_fmt_name(frame->format)));
-    
-    // Allocate a frame for the CPU copy
-    AVFrame *sw_frame = av_frame_alloc();
-    if (!sw_frame) {
-        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to allocate SW frame\n"));
-        return GF_OUT_OF_MEM;
-    }
+		if (ctx->gpuonly) {
+			// Zero-copy: output VAAPI frame directly
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Outputting VAAPI frame directly (zero-copy)\n"));
+			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_PIXFMT, &PROP_UINT(GF_PIXEL_HW_VAAPI));
+			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_WIDTH, &PROP_UINT(frame->width));
+        	gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_HEIGHT, &PROP_UINT(frame->height));
+		} else {
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Transferring hardware frame (format=%s) to system memory\n", 
+			av_get_pix_fmt_name(frame->format)));
+		
+		// Allocate a frame for the CPU copy
+		AVFrame *sw_frame = av_frame_alloc();
+		if (!sw_frame) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to allocate SW frame\n"));
+			return GF_OUT_OF_MEM;
+		}
 
-	// Copy ALL properties from hardware frame
-    av_frame_copy_props(sw_frame, frame);
-    
-    
-    // Set necessary dimensions for the software frame
-    sw_frame->width = frame->width;
-    sw_frame->height = frame->height;
-    sw_frame->format = AV_PIX_FMT_YUV420P;
+		// Copy ALL properties from hardware frame
+		av_frame_copy_props(sw_frame, frame);
+		
+		
+		// Set necessary dimensions for the software frame
+		sw_frame->width = frame->width;
+		sw_frame->height = frame->height;
+		sw_frame->format = AV_PIX_FMT_YUV420P;
 
-     // Use the hardware frame's linesize if available
-    if (frame->linesize[0] > 0) {
-        sw_frame->linesize[0] = frame->linesize[0];
-        sw_frame->linesize[1] = frame->linesize[1];
-    }
-    
-  	// Allocate buffers for the software frame
-    int ret = av_frame_get_buffer(sw_frame, 16);
-    if (ret < 0) {
-        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to allocate SW frame buffers: %s (w=%d,h=%d,fmt=%d)\n", 
-            av_err2str(ret), sw_frame->width, sw_frame->height, sw_frame->format));
-        av_frame_free(&sw_frame);
-        return GF_IO_ERR;
-    }
-    
-    // Make the frame writable
-    ret = av_frame_make_writable(sw_frame);
-    if (ret < 0) {
-        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to make SW frame writable: %s\n", 
-            av_err2str(ret)));
-        av_frame_free(&sw_frame);
-        return GF_IO_ERR;
-    }
-    
-    // Transfer hardware frame to system memory
-    ret = av_hwframe_transfer_data(sw_frame, frame, 0);
-    if (ret < 0) {
-        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to transfer HW frame: %s\n", 
-            av_err2str(ret)));
-        av_frame_free(&sw_frame);
-        return GF_IO_ERR;
-    }
-    
-    // Use the CPU copy 
-    av_frame_copy_props(sw_frame, frame);
-    av_frame_unref(frame);
-    av_frame_move_ref(frame, sw_frame);
-    av_frame_free(&sw_frame);
+		// Use the hardware frame's linesize if available
+		if (frame->linesize[0] > 0) {
+			sw_frame->linesize[0] = frame->linesize[0];
+			sw_frame->linesize[1] = frame->linesize[1];
+		}
+		
+		// Allocate buffers for the software frame
+		int ret = av_frame_get_buffer(sw_frame, 16);
+		if (ret < 0) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to allocate SW frame buffers: %s (w=%d,h=%d,fmt=%d)\n", 
+				av_err2str(ret), sw_frame->width, sw_frame->height, sw_frame->format));
+			av_frame_free(&sw_frame);
+			return GF_IO_ERR;
+		}
+		
+		// Make the frame writable
+		ret = av_frame_make_writable(sw_frame);
+		if (ret < 0) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to make SW frame writable: %s\n", 
+				av_err2str(ret)));
+			av_frame_free(&sw_frame);
+			return GF_IO_ERR;
+		}
+		
+		// Transfer hardware frame to system memory
+		ret = av_hwframe_transfer_data(sw_frame, frame, 0);
+		if (ret < 0) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] Failed to transfer HW frame: %s\n", 
+				av_err2str(ret)));
+			av_frame_free(&sw_frame);
+			return GF_IO_ERR;
+		}
+		
+		// Use the CPU copy 
+		av_frame_copy_props(sw_frame, frame);
+		av_frame_unref(frame);
+		av_frame_move_ref(frame, sw_frame);
+		av_frame_free(&sw_frame);
 
-	// Update decoder pix_fmt to match the transferred frame
-	ctx->decoder->pix_fmt = frame->format;
-	// update the cached format to prevent incorrect format detection later
-	ctx->o_ff_pfmt = frame->format;
+		// Update decoder pix_fmt to match the transferred frame
+		ctx->decoder->pix_fmt = frame->format;
+		// update the cached format to prevent incorrect format detection later
+		ctx->o_ff_pfmt = frame->format;
 
-	// Force swscaler recreation
-	if (ctx->sws_ctx) {
-    	sws_freeContext(ctx->sws_ctx);
-    	ctx->sws_ctx = NULL;
-	}
-    
-    GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Hardware frame transferred - new format: %s\n", 
-        av_get_pix_fmt_name(frame->format)));
+		// Force swscaler recreation
+		if (ctx->sws_ctx) {
+			sws_freeContext(ctx->sws_ctx);
+			ctx->sws_ctx = NULL;
+		}
+		
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Hardware frame transferred - new format: %s\n", 
+			av_get_pix_fmt_name(frame->format)));
+		}
 	}
 
 
@@ -1728,6 +1736,7 @@ static const GF_FilterArgs FFDecodeArgs[] =
 	{ OFFS(c), "codec name (GPAC or ffmpeg), only used to query possible arguments - updated to ffmpeg codec name after initialization", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(hwaccel), "hardware acceleration type (vaapi, videotoolbox, etc.)", GF_PROP_STRING, NULL, NULL, 0},
     { OFFS(hwdevice), "hardware device path", GF_PROP_STRING, NULL, NULL, 0},
+	{ OFFS(gpuonly), "output only GPU frames (no CPU transfer, VAAPI zero-copy)", GF_PROP_BOOL, NULL, NULL, GF_FS_ARG_HINT_EXPERT },
 	{ "*", -1, "any possible options defined for AVCodecContext and sub-classes. See `gpac -hx ffdec` and `gpac -hx ffdec:*`", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_META},
 	{0}
 };

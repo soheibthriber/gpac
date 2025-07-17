@@ -1150,6 +1150,7 @@ static const GF_PixFmt GF_PixelFormats[] =
 	{GF_PIXEL_RGBDS, "rgbds", "RGB+depth+bit shape (8 bits / RGB component, 7 bit depth (low bits) + 1 bit shape)"},
 	{GF_PIXEL_GL_EXTERNAL, "extgl", "External OpenGL texture of unknown format, to be used with samplerExternalOES\n"},
 	{GF_PIXEL_UNCV, "uncv", "Generic uncompressed format ISO/IEC 23001-17"},
+	{GF_PIXEL_HW_VAAPI, "vaapi", "VAAPI hardware frame (zero-copy)"},
 	{0}
 };
 
@@ -1321,6 +1322,15 @@ const char *gf_pixel_fmt_all_shortnames()
 GF_EXPORT
 Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *out_size, u32 *out_stride, u32 *out_stride_uv, u32 *out_planes, u32 *out_plane_uv_height)
 {
+	if (pixfmt == GF_PIXEL_HW_VAAPI) {
+		if (out_size) *out_size = 0;
+		if (out_stride) *out_stride = 0;
+		if (out_stride_uv) *out_stride_uv = 0;
+		if (out_planes) *out_planes = 1;
+		if (out_plane_uv_height) *out_plane_uv_height = 0;
+		return GF_TRUE;
+	}
+
 	u32 stride=0, stride_uv=0, size=0, planes=0, uv_height=0;
 	Bool no_in_stride = (!out_stride || (*out_stride==0)) ? GF_TRUE : GF_FALSE;
 	Bool no_in_stride_uv = (!out_stride_uv || (*out_stride_uv==0)) ? GF_TRUE : GF_FALSE;
@@ -1429,6 +1439,7 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 		planes=3;
 		if ((stride && height >= GF_UINT_MAX / stride) || height * stride >= GF_UINT_MAX - stride_uv * uv_height * 2)
 			return GF_FALSE;
+
 		size = stride * height + stride_uv * height * 2;
 		break;
 	case GF_PIXEL_YUV422_10:

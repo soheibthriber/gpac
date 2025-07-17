@@ -32,6 +32,10 @@
 
 #include "ff_common.h"
 
+#include <libavutil/hwcontext.h>  // For hardware acceleration context
+#include <libavutil/buffer.h>     // For AVBufferRef handling
+#include <libavutil/error.h>
+
 #if (LIBAVUTIL_VERSION_MAJOR < 59)
 #define _avf_dur	pkt_duration
 #else
@@ -151,6 +155,15 @@ typedef struct _gf_ffenc_ctx
 
 	u64 prev_dts;
 	Bool generate_dsi_only;
+
+	// hw acceleration
+	char *hwaccel;
+    char *hwdevice;
+	Bool hw_accel_enabled;
+    AVBufferRef *hw_device_ctx;
+    enum AVPixelFormat hw_pix_fmt;
+    enum AVHWDeviceType hw_device_type;
+    char hw_device_path[256];
 } GF_FFEncodeCtx;
 
 static GF_Err ffenc_configure_pid_ex(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove, Bool is_force_reconf);
@@ -181,6 +194,52 @@ static void ffenc_override_caps(GF_Filter *filter, u32 media_type)
 	}
 }
 
+static Bool ffenc_init_hw_accel(GF_FFEncodeCtx *ctx, const char *hwaccel_type)
+{
+	GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Attempting hardware acceleration with %s\n", hwaccel_type));
+	GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Using hardware device: %s\n", ctx->hw_device_path[0] ? ctx->hw_device_path : "(none)"));
+	GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Hardware acceleration enabled: %s on device %s\n", hwaccel_type, ctx->hw_device_path));
+    enum AVHWDeviceType type = av_hwdevice_find_type_by_name(hwaccel_type);
+    if (type == AV_HWDEVICE_TYPE_NONE) {
+        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFEnc] Hardware device type %s is not supported.\n", hwaccel_type));
+        ctx->hw_accel_enabled = GF_FALSE;
+        return GF_FALSE;
+    }
+
+    // Set device path from argument or default
+    if (ctx->hwdevice && ctx->hwdevice[0]) {
+        strncpy(ctx->hw_device_path, ctx->hwdevice, sizeof(ctx->hw_device_path)-1);
+        ctx->hw_device_path[sizeof(ctx->hw_device_path)-1] = 0;
+    } else if (type == AV_HWDEVICE_TYPE_VAAPI) {
+        strncpy(ctx->hw_device_path, "/dev/dri/renderD128", sizeof(ctx->hw_device_path)-1);
+        ctx->hw_device_path[sizeof(ctx->hw_device_path)-1] = 0;
+    } else {
+        ctx->hw_device_path[0] = 0;
+    }
+
+    GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Using hardware device: %s\n", ctx->hw_device_path[0] ? ctx->hw_device_path : "(none)"));
+
+    // Clean up existing device context if any exist
+    if (ctx->hw_device_ctx) {
+        av_buffer_unref(&ctx->hw_device_ctx);
+        ctx->hw_device_ctx = NULL;
+    }
+
+    // Create hardware device context
+    AVBufferRef *hw_device_ctx = NULL;
+    int err = av_hwdevice_ctx_create(&hw_device_ctx, type, ctx->hw_device_path, NULL, 0);
+    if (err < 0) {
+        GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFEnc] Failed to create hardware device: %s\n", av_err2str(err)));
+        ctx->hw_accel_enabled = GF_FALSE;
+        return GF_FALSE;
+    }
+
+    ctx->hw_device_type = type;
+    ctx->hw_device_ctx = hw_device_ctx;
+    ctx->hw_pix_fmt = GF_PIXEL_HW_VAAPI;
+    ctx->hw_accel_enabled = GF_TRUE;
+    return GF_TRUE;
+}
 static GF_Err ffenc_initialize(GF_Filter *filter)
 {
 	u32 codec_id;
@@ -193,8 +252,14 @@ static GF_Err ffenc_initialize(GF_Filter *filter)
 #if (LIBAVCODEC_VERSION_MAJOR >= 59)
 	ctx->pkt = av_packet_alloc();
 #endif
+	if (1) {
+    ctx->c = gf_strdup("h264_vaapi");
+    GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[FFEnc] Forcing VAAPI encoder: %s due to hwaccel argument\n", ctx->c));
+	}
 
 	if (!ctx->c) return GF_OK;
+
+
 
 	//first look by name, to handle cases such as "aac" vs "vo_aacenc"
 	ctx->force_codec = avcodec_find_encoder_by_name(ctx->c);
@@ -594,7 +659,8 @@ static GF_Err ffenc_process_video(GF_Filter *filter, struct _gf_ffenc_ctx *ctx)
 			if (ctx->nb_planes>1) {
 				ctx->frame->data[1] = (u8 *) data + ctx->stride * ctx->height;
 				ctx->frame->linesize[1] = ctx->stride_uv ? ctx->stride_uv : ctx->stride/2;
-				if (ctx->nb_planes>2) {
+				if (ctx->nb_planes>2) {		// If not VAAPI, drop packet and return (ignore CPU transfer)
+
 					ctx->frame->data[2] = (u8 *) ctx->frame->data[1] + ctx->stride_uv * ctx->height/2;
 					ctx->frame->linesize[2] = ctx->frame->linesize[1];
 				} else {
@@ -632,6 +698,37 @@ static GF_Err ffenc_process_video(GF_Filter *filter, struct _gf_ffenc_ctx *ctx)
 			ctx->frame->pts = ffenc_get_cts(ctx, pck);
 			ctx->frame->_avf_dur = gf_filter_pck_get_duration(pck);
 		}
+	// VAAPI zero-copy
+	if (ctx->hw_accel_enabled && ctx->frame->format == ctx->hw_pix_fmt) {
+		// Ensure encoder's hw_device_ctx is set
+		if (!ctx->encoder->hw_device_ctx && ctx->hw_device_ctx) {
+			ctx->encoder->hw_device_ctx = av_buffer_ref(ctx->hw_device_ctx);
+		}
+		// Ensure encoder's hw_frames_ctx is set
+		if (!ctx->encoder->hw_frames_ctx && ctx->hw_device_ctx) {
+			AVBufferRef *hw_frames_ref = av_hwframe_ctx_alloc(ctx->hw_device_ctx);
+			if (hw_frames_ref) {
+				AVHWFramesContext *frames_ctx = (AVHWFramesContext *)(hw_frames_ref->data);
+				frames_ctx->format = ctx->hw_pix_fmt;
+				frames_ctx->sw_format = ctx->pixel_fmt ? ctx->pixel_fmt : GF_PIXEL_HW_VAAPI;
+				frames_ctx->width = ctx->width;
+				frames_ctx->height = ctx->height;
+				if (av_hwframe_ctx_init(hw_frames_ref) >= 0)
+					ctx->encoder->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
+				av_buffer_unref(&hw_frames_ref);
+			}
+		}
+		// Send VAAPI frame directly to encoder
+		res = avcodec_send_frame(ctx->encoder, ctx->frame);
+		gotpck = 0;
+		res = avcodec_receive_packet(ctx->encoder, pkt);
+		if (res == 0) gotpck = 1;
+	} else {
+		// If not VAAPI, drop packet and return
+		if (pck) gf_filter_pid_drop_packet(ctx->in_pid);
+		FF_RELEASE_PCK(pkt)
+		return GF_OK;
+	}
 
 //use signed version of timestamp rescale since we may have negative dts
 #define SCALE_TS(_ts) if (_ts != GF_FILTER_NO_TS) { _ts = gf_timestamp_rescale_signed(_ts, ctx->premul_timescale, ctx->encoder->time_base.den); }
@@ -650,7 +747,8 @@ static GF_Err ffenc_process_video(GF_Filter *filter, struct _gf_ffenc_ctx *ctx)
 			s64 ts = ctx->frame->pts;
 			UNSCALE_TS(ts)
 			ctx->cts_first_frame_plus_one = 1 + ts;
-		}
+		}		// If not VAAPI, drop packet and return (ignore CPU transfer)
+
 
 
 #if (LIBAVFORMAT_VERSION_MAJOR<59)
@@ -2102,6 +2200,28 @@ static GF_Err ffenc_configure_pid_ex(GF_Filter *filter, GF_FilterPid *pid, Bool 
 
 	av_dict_copy(&options, ctx->options, 0);
 	ffmpeg_check_threads(filter, options, ctx->encoder);
+
+	// hw vaapi acceleration
+	if (ctx->hwaccel && !strcmp(ctx->hwaccel, "vaapi")) {
+		if (!ffenc_init_hw_accel(ctx, "vaapi")) return GF_NOT_SUPPORTED;
+		ctx->encoder->pix_fmt = GF_PIXEL_HW_VAAPI;
+		ctx->encoder->hw_device_ctx = av_buffer_ref(ctx->hw_device_ctx);
+
+		// Set up hw_frames_ctx for encoder
+		AVBufferRef *hw_frames_ctx = av_hwframe_ctx_alloc(ctx->encoder->hw_device_ctx);
+		if (hw_frames_ctx) {
+			AVHWFramesContext *frames_ctx = (AVHWFramesContext*)hw_frames_ctx->data;
+			frames_ctx->format = GF_PIXEL_HW_VAAPI;
+			frames_ctx->width = ctx->width;
+			frames_ctx->height = ctx->height;
+			frames_ctx->sw_format = GF_PIXEL_HW_VAAPI; 
+			frames_ctx->initial_pool_size = 16;
+			av_hwframe_ctx_init(hw_frames_ctx);
+			ctx->encoder->hw_frames_ctx = av_buffer_ref(hw_frames_ctx);
+			av_buffer_unref(&hw_frames_ctx);
+		}
+	}
+
 	res = avcodec_open2(ctx->encoder, codec, &options);
 	if (res < 0) {
 		if (options) av_dict_free(&options);
@@ -2345,6 +2465,8 @@ static const GF_FilterArgs FFEncodeArgs[] =
 	, GF_PROP_SINT, "1", NULL, GF_FS_ARG_HINT_EXPERT|GF_FS_ARG_UPDATE},
 
 	{ "*", -1, "any possible options defined for AVCodecContext and sub-classes. see `gpac -hx ffenc` and `gpac -hx ffenc:*`", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_META},
+	{ OFFS(hwaccel), "hardware acceleration type (vaapi, etc.)", GF_PROP_STRING, NULL, NULL, 0 },
+	{ OFFS(hwdevice), "hardware device path", GF_PROP_STRING, NULL, NULL, 0 },
 	{0}
 };
 
