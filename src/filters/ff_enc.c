@@ -236,7 +236,7 @@ static Bool ffenc_init_hw_accel(GF_FFEncodeCtx *ctx, const char *hwaccel_type)
 
     ctx->hw_device_type = type;
     ctx->hw_device_ctx = hw_device_ctx;
-    ctx->hw_pix_fmt = GF_PIXEL_HW_VAAPI;
+    ctx->hw_pix_fmt = AV_PIX_FMT_VAAPI;//GF_PIXEL_HW_VAAPI;
     ctx->hw_accel_enabled = GF_TRUE;
     return GF_TRUE;
 }
@@ -710,7 +710,7 @@ static GF_Err ffenc_process_video(GF_Filter *filter, struct _gf_ffenc_ctx *ctx)
 			if (hw_frames_ref) {
 				AVHWFramesContext *frames_ctx = (AVHWFramesContext *)(hw_frames_ref->data);
 				frames_ctx->format = ctx->hw_pix_fmt;
-				frames_ctx->sw_format = ctx->pixel_fmt ? ctx->pixel_fmt : GF_PIXEL_HW_VAAPI;
+				frames_ctx->sw_format = ctx->pixel_fmt ? ctx->pixel_fmt : AV_PIX_FMT_NV12;
 				frames_ctx->width = ctx->width;
 				frames_ctx->height = ctx->height;
 				if (av_hwframe_ctx_init(hw_frames_ref) >= 0)
@@ -1689,6 +1689,8 @@ static GF_Err ffenc_configure_pid_ex(GF_Filter *filter, GF_FilterPid *pid, Bool 
 			ctx->in_tk_delay = prop ? prop->value.longsint : 0;
 			return GF_OK;
 		}
+		// to be deleted force ignoring
+		if (1) return GF_OK;
 
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFEnc] codec reconfiguration, beginning flush\n"));
 		ctx->reconfig_pending = GF_TRUE;
@@ -1766,6 +1768,12 @@ static GF_Err ffenc_configure_pid_ex(GF_Filter *filter, GF_FilterPid *pid, Bool 
 					}
 				}
 			}
+		}
+
+		if (codec->name && !strcmp(codec->name, "h264_vaapi")) {
+			ctx->pixel_fmt = AV_PIX_FMT_VAAPI;
+			change_input_fmt = AV_PIX_FMT_VAAPI;
+			//pfmt = GF_PIXEL_HW_VAAPI;
 		}
 
 		if (ctx->pixel_fmt != change_input_fmt) {
@@ -2204,17 +2212,17 @@ static GF_Err ffenc_configure_pid_ex(GF_Filter *filter, GF_FilterPid *pid, Bool 
 	// hw vaapi acceleration
 	if (ctx->hwaccel && !strcmp(ctx->hwaccel, "vaapi")) {
 		if (!ffenc_init_hw_accel(ctx, "vaapi")) return GF_NOT_SUPPORTED;
-		ctx->encoder->pix_fmt = GF_PIXEL_HW_VAAPI;
+		ctx->encoder->pix_fmt = AV_PIX_FMT_VAAPI;//GF_PIXEL_HW_VAAPI;
 		ctx->encoder->hw_device_ctx = av_buffer_ref(ctx->hw_device_ctx);
 
 		// Set up hw_frames_ctx for encoder
 		AVBufferRef *hw_frames_ctx = av_hwframe_ctx_alloc(ctx->encoder->hw_device_ctx);
 		if (hw_frames_ctx) {
 			AVHWFramesContext *frames_ctx = (AVHWFramesContext*)hw_frames_ctx->data;
-			frames_ctx->format = GF_PIXEL_HW_VAAPI;
+			frames_ctx->format = AV_PIX_FMT_VAAPI;
 			frames_ctx->width = ctx->width;
 			frames_ctx->height = ctx->height;
-			frames_ctx->sw_format = GF_PIXEL_HW_VAAPI; 
+			frames_ctx->sw_format = AV_PIX_FMT_NV12; 
 			frames_ctx->initial_pool_size = 16;
 			av_hwframe_ctx_init(hw_frames_ctx);
 			ctx->encoder->hw_frames_ctx = av_buffer_ref(hw_frames_ctx);
@@ -2382,6 +2390,9 @@ static Bool ffenc_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 	else if (evt->base.type==GF_FEVT_STOP) {
 		ctx->nb_frames_in = ctx->nb_frames_out = 0;
 	}
+	// else if (evt->base.type==GF_FEVT_PLAY) {
+	// 	return GF_TRUE;
+	// }
 	return GF_FALSE;
 }
 

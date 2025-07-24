@@ -420,7 +420,7 @@ restart:
 		if (ctx->gpuonly) {
 			// Zero-copy: output VAAPI frame directly
 			GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFDec] Outputting VAAPI frame directly (zero-copy)\n"));
-			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_PIXFMT, &PROP_UINT(GF_PIXEL_HW_VAAPI));
+			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_PIXFMT, &PROP_UINT(AV_PIX_FMT_VAAPI));
 			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_WIDTH, &PROP_UINT(frame->width));
         	gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_HEIGHT, &PROP_UINT(frame->height));
 		} else {
@@ -658,6 +658,8 @@ restart:
 		break;
 
 	case GF_PIXEL_YUV422:
+	case GF_PIXEL_HW_VAAPI:
+	case AV_PIX_FMT_VAAPI:
 	case GF_PIXEL_YUV422_10:
 		dst_planes[0] =  (uint8_t *)out_buffer;
 		dst_planes[1] =  (uint8_t *)out_buffer + ctx->stride * ctx->height;
@@ -690,11 +692,16 @@ restart:
 		return GF_NOT_SUPPORTED;
 	}
 
+	if (ctx->pixel_fmt == GF_PIXEL_HW_VAAPI || ff_pfmt == AV_PIX_FMT_VAAPI) {
+    // Zero-copy: do not use swscale, just forward the frame
+	} else {
+
 	ctx->sws_ctx = sws_getCachedContext(ctx->sws_ctx,
 	                                   ctx->decoder->width, ctx->decoder->height, ff_pfmt,
 	                                   ctx->width, ctx->height, pix_out, SWS_BICUBIC, NULL, NULL, NULL);
 	if (ctx->sws_ctx) {
 		sws_scale(ctx->sws_ctx, (const uint8_t * const*)frame->data, frame->linesize, 0, ctx->height, dst_planes, dst_stride);
+	}
 	}
 
 
