@@ -38,6 +38,7 @@ REG_DEC(ffdmx)
 REG_DEC(ffdmxpid)
 REG_DEC(ffdec)
 REG_DEC(ffenc)
+REG_DEC(hw_ffenc)
 REG_DEC(ffavin)
 REG_DEC(ffsws)
 REG_DEC(ffmx)
@@ -340,6 +341,7 @@ BuiltinReg BuiltinFilters [] = {
 	REG_IT(ffavin),
 	REG_IT(ffsws),
 	REG_IT(ffenc),
+	REG_IT(hw_ffenc),
 	REG_IT(ffmx),
 	REG_IT(ffavf),
 	REG_IT(ffbsf),
